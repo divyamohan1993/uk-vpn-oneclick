@@ -3,6 +3,15 @@
 All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [SemVer](https://semver.org/).
 
+## [1.1.1] - 2026-06-13
+
+### Fixed
+- **WireGuard "connected but no internet."** The WireGuard FORWARD ACCEPT rules
+  were appended *after* hwdsl2's catch-all `FORWARD -j DROP`, so forwarded packets
+  were dropped, the tunnel handshook but no traffic flowed. They're now inserted at
+  the top of the chain (`-I FORWARD`). IKEv2 was unaffected. Found via a phone on
+  mobile data; fixed on the live server and in the install script.
+
 ## [1.1.0] - 2026-06-12
 
 ### Added

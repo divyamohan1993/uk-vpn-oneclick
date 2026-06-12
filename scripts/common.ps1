@@ -240,7 +240,8 @@ if [ ! -f /etc/wireguard/wg0.conf ]; then
 Address = 10.7.0.1/24
 ListenPort = 51820
 PrivateKey = $SRV_KEY
-PostUp = iptables -A FORWARD -i wg0 -j ACCEPT; iptables -A FORWARD -o wg0 -j ACCEPT; iptables -t nat -A POSTROUTING -o $WAN -j MASQUERADE
+# -I (insert at top) so these ACCEPTs sit ABOVE hwdsl2's catch-all FORWARD DROP.
+PostUp = iptables -I FORWARD 1 -i wg0 -j ACCEPT; iptables -I FORWARD 1 -o wg0 -j ACCEPT; iptables -t nat -A POSTROUTING -o $WAN -j MASQUERADE
 PostDown = iptables -D FORWARD -i wg0 -j ACCEPT; iptables -D FORWARD -o wg0 -j ACCEPT; iptables -t nat -D POSTROUTING -o $WAN -j MASQUERADE
 WG
   for i in $(seq 1 10); do

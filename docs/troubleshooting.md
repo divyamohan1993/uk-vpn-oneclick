@@ -23,6 +23,13 @@ Things to try:
   can't reliably beat it; that's the one case where a commercial streaming VPN
   (which rotates residential IPs) is the better tool.
 
+## WireGuard says "connected" but nothing loads
+The tunnel handshakes but the server isn't forwarding your traffic out. This was a
+bug fixed in **v1.1.1** (the WireGuard firewall rules now sit *above* hwdsl2's
+catch-all FORWARD DROP). If your server was built before that fix, run `destroy.bat`
+then `connect.bat` to rebuild it. To confirm a server is forwarding:
+`sudo iptables -S FORWARD | head` should show `-i wg0 -j ACCEPT` *before* any `DROP`.
+
 ## Error 809 when connecting
 You're on an old L2TP connection. This tool uses **IKEv2** specifically to avoid
 809 (L2TP fails behind AWS NAT). Make sure you're connecting to
