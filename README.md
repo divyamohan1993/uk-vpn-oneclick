@@ -46,6 +46,16 @@ That's it. Your secret key stays on your machine and is never in this repo.
 To reconnect later **without** rebuilding (while the server still exists): open
 **Settings -> Network -> VPN** and click **UK VPN (one-click)**. To stop paying, run `destroy.bat`.
 
+## Connect your phones & other laptops
+
+`connect.bat` also drops a **`uk-vpn-devices`** folder on your Desktop with everything for every other device, including **WireGuard QR codes**. Same server, any number of devices:
+
+- 📱 **Android / iPhone** -> install the **WireGuard** app, scan `wireguard/device-N.png`. (iPhone can also go app-free: tap `ikev2/vpnclient.mobileconfig`.)
+- 💻 **Another Windows laptop** -> just run **`connect.bat`** there; if the UK server already exists it **auto-joins** this laptop to it. (No AWS on that laptop? Copy the repo + `uk-vpn-devices` and run **`add-windows-device.bat`**.)
+- 🐧 **Linux** -> `./setup-linux.sh 4` (WireGuard, one command).
+
+Use a **different** `device-N` per device. Full steps: **[docs/devices-guide.md](docs/devices-guide.md)** (also copied into the folder as `READ-ME-FIRST.md`).
+
 ## What it costs
 
 | Item | Cost |
@@ -70,7 +80,7 @@ Full details: **[docs/how-it-works.md](docs/how-it-works.md)** · Security model
 ## Honest limitations
 
 - **Some streaming services block datacenter IPs.** A fresh AWS IP usually works, but big platforms actively block cloud ranges. If a service won't play, that's why, it's not a bug in this tool. See troubleshooting.
-- **Windows only** (uses the native Windows VPN + PowerShell).
+- **Provisioning is Windows-only** (the `connect.bat` / `destroy.bat` driver uses PowerShell). Once the server is up, **any device connects**, Windows, macOS, Linux, Android, iPhone, via WireGuard or IKEv2.
 - **First connect takes ~5 minutes** because the VPN server compiles from source on a fresh box. Reconnecting to an existing server is instant.
 - Respect the terms of service of whatever you access. This is a tool for running your own VPN; what you do through it is your responsibility.
 

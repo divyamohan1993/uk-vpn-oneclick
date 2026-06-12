@@ -3,6 +3,25 @@
 All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [SemVer](https://semver.org/).
 
+## [1.1.0] - 2026-06-12
+
+### Added
+- **Multi-device support.** The server now also runs **WireGuard** alongside IKEv2
+  and pre-generates 10 ready peers, each as a scannable **QR code**.
+- `connect.bat` now drops a `uk-vpn-devices` folder on the Desktop with every
+  client config: WireGuard QRs/`.conf`, the iPhone one-tap `.mobileconfig`, the
+  Android strongSwan `.sswan`, the Windows/Linux `.p12` + CA, and the server IP.
+- `add-windows-device.bat` - puts an extra Windows laptop on the running VPN
+  (no AWS needed; reads the device bundle).
+- `setup-linux.sh` - one-click WireGuard for Linux.
+- `docs/devices-guide.md` - per-device steps (Android/iPhone/Windows/Linux/Mac),
+  copied into the bundle as `READ-ME-FIRST.md`.
+- `.gitattributes` - keeps `*.sh` LF so it runs on Linux when cloned on Windows.
+
+### Changed
+- Firewall now also opens UDP 51820 (WireGuard).
+- `destroy.bat` also wipes the `uk-vpn-devices` bundle (those keys are secrets).
+
 ## [1.0.0] - 2026-06-11
 
 ### Added

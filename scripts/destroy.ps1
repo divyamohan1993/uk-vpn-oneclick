@@ -46,6 +46,12 @@ try {
         Write-Log 'Wiped local keys/certs/state.'
     }
 
+    # 4b. Wipe the device bundle on the Desktop (WireGuard keys + profiles are secrets)
+    if (Test-Path $DevicesDir) {
+        Remove-Item $DevicesDir -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Log "Removed device configs folder ($DevicesDir)."
+    }
+
     Write-Host ''
     Write-Host '  Torn down. Nothing is running, ongoing cost is now zero.' -ForegroundColor Green
     Write-Host ''

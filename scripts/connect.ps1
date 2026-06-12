@@ -21,31 +21,33 @@ try {
     Assert-Tooling
     Assert-AwsCredentials
 
-    if (Test-InstanceExists $Instance $Region) {
-        Write-Host ''
-        Write-Host "An instance named '$Instance' already exists and is billing." -ForegroundColor Yellow
-        Write-Host "To just reconnect: open Windows Settings > VPN and click '$VpnName'." -ForegroundColor Yellow
-        Write-Host "To start fresh or stop billing: run destroy.bat first." -ForegroundColor Yellow
-        return
+    # If THIS PC is already on this VPN (a re-run), drop it first - otherwise Get-PublicIp
+    # would read the VPN's UK exit IP and we'd lock the firewall to the wrong address.
+    $ErrorActionPreference = 'Continue'; rasdial $VpnName /disconnect 2>$null | Out-Null; $ErrorActionPreference = 'Stop'
+
+    # 1. Create the UK server, OR join the one that already exists (create-or-join).
+    $creating = -not (Test-InstanceExists $Instance $Region)
+    if ($creating) {
+        Write-Log "No UK server yet - creating one ($Bundle, London $Region)..."
+        Invoke-Aws @('lightsail','create-instances','--instance-names',$Instance,
+            '--availability-zone',$Zone,'--blueprint-id',$Blueprint,'--bundle-id',$Bundle,
+            '--ip-address-type','dualstack','--region',$Region) | Out-Null
+        $ip = Wait-InstanceIp $Instance $Region
+        Write-Log "Instance running at $ip" 'Green'
+    } else {
+        Write-Log "UK server already exists - joining THIS device to it (no new server, no extra cost)." 'Green'
+        $ip = Wait-InstanceIp $Instance $Region
     }
 
-    # 1. Create the instance
-    Write-Log "Creating Lightsail $Bundle in London ($Region)..."
-    Invoke-Aws @('lightsail','create-instances','--instance-names',$Instance,
-        '--availability-zone',$Zone,'--blueprint-id',$Blueprint,'--bundle-id',$Bundle,
-        '--ip-address-type','dualstack','--region',$Region) | Out-Null
-
-    $ip = Wait-InstanceIp $Instance $Region
-    Write-Log "Instance running at $ip" 'Green'
-
-    # 2. Lock the firewall: SSH only from this PC's IP; IKEv2 UDP 500/4500 (cert-protected)
+    # 2. Lock the firewall: SSH only from this PC's IP; VPN ports open (cert/key-protected)
     $myIp = Get-PublicIp
-    Write-Log "Locking firewall (SSH from $myIp only, IKEv2 500/4500)..."
+    Write-Log "Locking firewall (SSH from $myIp only; IKEv2 500/4500; WireGuard 51820)..."
     Invoke-Aws @('lightsail','put-instance-public-ports','--instance-name',$Instance,'--region',$Region,
         '--port-infos',
         "fromPort=22,toPort=22,protocol=TCP,cidrs=$myIp/32",
         'fromPort=500,toPort=500,protocol=UDP,cidrs=0.0.0.0/0',
-        'fromPort=4500,toPort=4500,protocol=UDP,cidrs=0.0.0.0/0') | Out-Null
+        'fromPort=4500,toPort=4500,protocol=UDP,cidrs=0.0.0.0/0',
+        'fromPort=51820,toPort=51820,protocol=UDP,cidrs=0.0.0.0/0') | Out-Null
 
     # 3. SSH key
     $pem = Join-Path $StateDir 'lightsail.pem'
@@ -56,18 +58,34 @@ try {
     # 4. Wait for SSH, then install the VPN on the server (~5 min: Libreswan compiles)
     Wait-Ssh $pem $ip
     $p12pass = New-RandomPassword
-    Write-Log 'Installing VPN on the server (~5 min, please wait)...' 'Yellow'
+    if ($creating) { Write-Log 'Installing VPN on the server (~5 min, first time only)...' 'Yellow' }
+    else           { Write-Log 'Fetching this device''s config from the existing server...' 'Yellow' }
     $remote = (Get-RemoteInstallScript).Replace('__P12PASS__', $p12pass)
     Invoke-RemoteScript $pem $ip $remote
 
-    # 5. Pull the client cert + CA down
+    # 5. Pull the client cert + CA down (for this Windows PC)
     $p12 = Join-Path $StateDir 'vpnclient.p12'
     $ca  = Join-Path $StateDir 'vpn-ca.pem'
     Invoke-Scp $pem "${ip}:/tmp/winclient.p12" $p12
     Invoke-Scp $pem "${ip}:/tmp/ca.pem" $ca
 
+    # 5b. On first CREATE only: pull the full device bundle (WireGuard QR codes + the
+    #     iPhone/Android/Linux profiles) to the Desktop. A join run skips this so it can
+    #     never wipe the phone QR codes the hub laptop already holds.
+    if ($creating) {
+        Write-Log 'Downloading device configs (WireGuard QR codes + phone/laptop profiles)...'
+        if (Test-Path $DevicesDir) { Remove-Item $DevicesDir -Recurse -Force -ErrorAction SilentlyContinue }
+        Invoke-Scp $pem "${ip}:/tmp/devices" $DevicesDir -Recurse
+        $guide = Join-Path $PSScriptRoot '..\docs\devices-guide.md'
+        if (Test-Path $guide) { Copy-Item $guide (Join-Path $DevicesDir 'READ-ME-FIRST.md') -Force }
+        # The .p12 import password (for a 2nd Windows laptop / Linux). Secret folder, never committed.
+        $ik = Join-Path $DevicesDir 'ikev2'
+        if (Test-Path $ik) { Set-Content -Path (Join-Path $ik 'IMPORT-PASSWORD.txt') -Value $p12pass -Encoding ascii }
+        Write-Log "Device configs (incl. phone QR codes) saved to: $DevicesDir" 'Green'
+    }
+
     Save-State @{ instance=$Instance; region=$Region; ip=$ip; vpnName=$VpnName
-                  pem=$pem; p12=$p12; ca=$ca
+                  pem=$pem; p12=$p12; ca=$ca; devicesDir=$DevicesDir
                   createdUtc=(Get-Date).ToUniversalTime().ToString('o') }
 
     # 6. Trust the CA, import the client cert, (re)create the IKEv2 connection
@@ -102,13 +120,22 @@ try {
     try { $geo = Get-GeoInfo } catch { }
     Write-Host ''
     if ($geo -and $geo.country -eq 'GB') {
-        Write-Host "  Connected. You are now in $($geo.city), United Kingdom (IP $($geo.ip))." -ForegroundColor Green
-        Write-Host '  Stream away. When you are done, run destroy.bat to stop all billing.' -ForegroundColor Green
+        Write-Host "  This PC is connected. You are now in $($geo.city), United Kingdom (IP $($geo.ip))." -ForegroundColor Green
     } elseif ($geo) {
         Write-Host "  Connected, but your IP shows $($geo.country) (expected GB). See docs\troubleshooting.md." -ForegroundColor Yellow
     } else {
         Write-Host '  Connected. (Could not auto-verify location - check https://ifconfig.me in a browser.)' -ForegroundColor Yellow
     }
+    Write-Host ''
+    if ($creating) {
+        Write-Host "  OTHER DEVICES (phones, laptops, Linux): open this folder ->" -ForegroundColor Cyan
+        Write-Host "    $DevicesDir" -ForegroundColor White
+        Write-Host "  Open READ-ME-FIRST.md there. Quick version:" -ForegroundColor Cyan
+        Write-Host "    - Phone: open wireguard\device-1.png and scan it with the WireGuard app." -ForegroundColor Gray
+        Write-Host "    - iPhone (no app): AirDrop/email ikev2\vpnclient.mobileconfig, tap to install." -ForegroundColor Gray
+        Write-Host "    - Another Windows laptop: just run connect.bat there - it auto-joins this server." -ForegroundColor Gray
+    }
+    Write-Host '  When you are done on ALL devices, run destroy.bat to stop billing.' -ForegroundColor Green
     Write-Host ''
     Write-Log 'CONNECT complete.' 'Cyan'
 }

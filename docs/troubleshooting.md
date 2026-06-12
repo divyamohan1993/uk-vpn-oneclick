@@ -45,10 +45,18 @@ First connect compiles Libreswan and takes ~5 minutes, that's normal. If it
 genuinely errors out, just run `destroy.bat` (it cleans up partial setups and
 stops billing), then `connect.bat` again.
 
-## "An instance already exists"
-You already have a server running (and billing). Either reconnect from
-**Settings -> VPN -> UK VPN (one-click)**, or run `destroy.bat` to remove it
-before building a new one.
+## Adding more devices / a phone won't connect
+- **Another laptop with AWS access:** just run `connect.bat` there. It detects the
+  existing UK server and **joins** this device to it (no new server, no extra cost).
+- **A laptop without AWS access:** copy the repo + the `uk-vpn-devices` folder onto
+  it and run `add-windows-device.bat`.
+- **Phone on mobile data:** this is expected to work, the VPN ports are open to the
+  whole internet (cert/key-protected). If it won't connect, scan a **different**
+  `device-N` QR (don't reuse one already active on another device).
+
+## Re-running connect.bat
+Running it again is safe: if the server exists it just reconnects this device; if
+not, it recreates it. To actually stop billing you must run `destroy.bat`.
 
 ## Did I leave anything running? (peace of mind)
 ```
