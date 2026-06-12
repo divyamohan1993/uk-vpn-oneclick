@@ -1,0 +1,89 @@
+# How it works
+
+## The picture
+
+```
+   Your Windows PC (Delhi)                         AWS Lightsail (London)
+  +-----------------------+                       +------------------------+
+  |  Native Windows VPN   |   IKEv2/IPsec tunnel  |  Libreswan (strongSwan |
+  |  client (IKEv2)       |======================>|  family) IKEv2 server  |
+  |  full-tunnel: ALL     |   UDP 500 + 4500      |                        |
+  |  traffic goes to UK   |   AES-256 / SHA-256   |  NATs your traffic out |
+  +-----------------------+                       |  a UK public IP        |
+            |                                     +-----------+------------+
+            | all your internet traffic                      |
+            | now exits from London  <-----------------------+
+            v
+        Netflix / websites see a UK IP
+```
+
+You connect to the London box over an encrypted IKEv2 tunnel. Because it's a
+**full tunnel**, every packet from your PC goes to London first and exits to the
+internet from there, so the outside world sees a UK IP, and your ISP only sees
+encrypted traffic to one address.
+
+## What `connect.ps1` does, step by step
+
+1. **Checks prerequisites** - admin rights (needed to install a machine
+   certificate), the AWS CLI (installs it via winget if missing), and that your
+   AWS credentials work (`aws sts get-caller-identity`).
+
+2. **Guards against double-spend** - if an instance named `uk-vpn-oneclick`
+   already exists, it stops and tells you to reconnect or run `destroy.bat`.
+   This is what keeps a forgotten server from silently costing money.
+
+3. **Creates the server** - `aws lightsail create-instances`, Ubuntu 24.04,
+   bundle `micro_3_0` in `eu-west-2` (London), dual-stack so it gets a public
+   IPv4 your home connection can reach.
+
+4. **Locks the firewall** - `put-instance-public-ports` sets the *complete*
+   rule set: SSH (22/TCP) only from your PC's current public IP, and the VPN
+   ports (500/UDP, 4500/UDP) open to the internet but protected by certificate
+   auth. Nothing else is reachable.
+
+5. **Gets an SSH key** - downloads the Lightsail default key pair and restricts
+   its file permissions with `icacls` (OpenSSH refuses a world-readable key).
+
+6. **Installs the VPN** - over SSH it runs the
+   [hwdsl2 IPsec installer](https://github.com/hwdsl2/setup-ipsec-vpn), which
+   compiles and configures Libreswan and auto-sets-up IKEv2 with a client
+   certificate. The script is sent **base64-encoded** and piped to `sudo bash`
+   so PowerShell never mangles the quoting.
+
+7. **Exports the client identity** - re-exports the client certificate as a
+   `.p12` with a freshly generated, *known* password (the installer's own
+   password isn't surfaced), plus the CA certificate. Both are copied down.
+
+8. **Configures Windows** - imports the CA into *Trusted Root* (so the server
+   cert validates), imports the client `.p12` into the machine's *Personal*
+   store, then creates an IKEv2 connection using **machine-certificate** auth
+   and a crypto policy proven to match the server.
+
+9. **Connects and verifies** - dials the connection and queries a geo-IP API.
+   If your IP now resolves to `GB`, you're set.
+
+## Why these specific choices
+
+- **IKEv2, not L2TP.** The Windows built-in client also speaks L2TP/IPsec, but
+  L2TP to a cloud server behind 1:1 NAT (which AWS uses) fails with *error 809*
+  unless you edit the registry and reboot. IKEv2 handles NAT natively and uses
+  certificate auth, no reboot, more secure.
+
+- **`micro_3_0` (1 GB RAM), not the cheaper 512 MB `nano`.** The installer
+  compiles Libreswan from source; 512 MB runs out of memory. We also add a 2 GB
+  swap file as a belt-and-braces measure. The cost difference for a few hours is
+  a fraction of a rupee.
+
+- **Ephemeral, create-and-destroy.** Lightsail bills even *stopped* instances,
+  so "stop when idle" saves nothing. Deleting is the only way to reach zero, so
+  the model is: build on demand, destroy after. First build ~5 min; teardown
+  ~20 sec.
+
+- **Full tunnel.** So streaming, DNS, and everything else exit from the UK, not
+  just browser traffic.
+
+## State and where things live
+
+Runtime files (SSH key, certs, `state.json`, log) are written to
+`%LOCALAPPDATA%\uk-vpn-oneclick\`, deliberately **outside** this repo so secrets
+can't be committed. `destroy.ps1` wipes them.

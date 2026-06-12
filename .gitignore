@@ -1,0 +1,24 @@
+# Never commit secrets or runtime state.
+# The tool writes all of these to %LOCALAPPDATA%\uk-vpn-oneclick (outside this repo),
+# but these patterns are a second line of defence in case anything lands here.
+*.pem
+*.p12
+*.pfx
+*.key
+*.cer
+*.crt
+ca.pem
+vpn-ca.pem
+vpnclient.*
+state.json
+log.txt
+ikev2-result.txt
+
+# AWS / local credentials
+.aws/
+credentials
+
+# OS noise
+Thumbs.db
+desktop.ini
+.DS_Store
