@@ -3,6 +3,26 @@
 All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [SemVer](https://semver.org/).
 
+## [1.2.0] - 2026-06-13
+
+### Added
+- **Tag-gated teardown.** Every instance this tool creates is stamped with a
+  `created-by=uk-vpn-oneclick` tag *at creation* (atomic, so even a half-finished
+  create is cleanable). `destroy.bat` now deletes **only** instances carrying that
+  tag, so a same-named Lightsail instance you made by hand is never touched. If an
+  untagged same-named instance exists, destroy refuses and prints the exact manual
+  delete command instead. `connect.bat` self-heals the tag on the join path for any
+  instance that predates this change. Verified live: real create stamps the tag,
+  `Get-OurInstances` matches exactly the one box.
+
+### Changed
+- **Default bundle `micro_3_0` -> `nano_3_0`** ($7 -> $5/mo, ~₹0.82 -> ₹0.58/hr).
+  Verified end-to-end on a live box: Libreswan compiles on 512 MB via the existing
+  2 GB swap, VPN connects with a GB exit IP. One line in `connect.ps1` reverts to
+  `micro_3_0` for more RAM headroom if ever needed.
+- `destroy.bat` reads region/instance from saved state (falling back to defaults)
+  rather than assuming hardcoded values; deletion is driven by the ownership tag.
+
 ## [1.1.1] - 2026-06-13
 
 ### Fixed

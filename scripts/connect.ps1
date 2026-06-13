@@ -9,7 +9,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------- config (edit here to change region/size) ----------------
 $Region    = 'eu-west-2'        # London
 $Zone      = 'eu-west-2a'
-$Bundle    = 'micro_3_0'        # 1 GB RAM. The 512 MB 'nano' OOMs compiling Libreswan.
+$Bundle    = 'nano_3_0'         # 512 MB RAM (+2 GB swap). Cheaper; risk is OOM compiling Libreswan - testing it.
 $Blueprint = 'ubuntu_24_04'
 $Instance  = 'uk-vpn-oneclick'
 $VpnName   = 'UK VPN (one-click)'
@@ -29,13 +29,19 @@ try {
     $creating = -not (Test-InstanceExists $Instance $Region)
     if ($creating) {
         Write-Log "No UK server yet - creating one ($Bundle, London $Region)..."
+        # Born tagged ($TagKey=$TagValue): the tag is applied atomically at creation,
+        # so even a half-finished create is recognisable - and deletable - by destroy.
         Invoke-Aws @('lightsail','create-instances','--instance-names',$Instance,
             '--availability-zone',$Zone,'--blueprint-id',$Blueprint,'--bundle-id',$Bundle,
-            '--ip-address-type','dualstack','--region',$Region) | Out-Null
+            '--ip-address-type','dualstack','--region',$Region,
+            '--tags',"key=$TagKey,value=$TagValue") | Out-Null
         $ip = Wait-InstanceIp $Instance $Region
         Write-Log "Instance running at $ip" 'Green'
     } else {
         Write-Log "UK server already exists - joining THIS device to it (no new server, no extra cost)." 'Green'
+        # Self-heal: stamp our tag in case this instance predates tag-aware connect,
+        # so teardown can recognise it as ours. Idempotent.
+        Set-OurTag $Instance $Region
         $ip = Wait-InstanceIp $Instance $Region
     }
 
@@ -86,6 +92,7 @@ try {
 
     Save-State @{ instance=$Instance; region=$Region; ip=$ip; vpnName=$VpnName
                   pem=$pem; p12=$p12; ca=$ca; devicesDir=$DevicesDir
+                  tagKey=$TagKey; tagValue=$TagValue
                   createdUtc=(Get-Date).ToUniversalTime().ToString('o') }
 
     # 6. Trust the CA, import the client cert, (re)create the IKEv2 connection

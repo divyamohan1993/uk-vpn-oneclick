@@ -8,9 +8,16 @@ param()
 $ErrorActionPreference = 'Continue'
 . (Join-Path $PSScriptRoot 'common.ps1')
 
-$Region   = 'eu-west-2'
-$Instance = 'uk-vpn-oneclick'
-$VpnName  = 'UK VPN (one-click)'
+# Defaults are used ONLY when there's no state.json (fresh clone / wiped state).
+# The real source of truth for WHAT to delete is the ownership tag, not these names.
+$DefaultRegion   = 'eu-west-2'
+$DefaultInstance = 'uk-vpn-oneclick'
+$DefaultVpnName  = 'UK VPN (one-click)'
+
+$state    = Load-State
+$Region   = if ($state -and $state.region)   { $state.region }   else { $DefaultRegion }
+$Instance = if ($state -and $state.instance) { $state.instance } else { $DefaultInstance }
+$VpnName  = if ($state -and $state.vpnName)  { $state.vpnName }  else { $DefaultVpnName }
 
 try {
     Write-Log '=== UK VPN one-click: DESTROY ===' 'Cyan'
@@ -31,12 +38,28 @@ try {
         Where-Object { $_.Subject -match 'CN=IKEv2 VPN CA' } |
         ForEach-Object { Remove-Item $_.PSPath -Force -ErrorAction SilentlyContinue; Write-Log 'Removed VPN CA certificate' }
 
-    # 3. Delete the Lightsail instance (stops all billing)
-    if (Test-InstanceExists $Instance $Region) {
-        Invoke-Aws @('lightsail','delete-instance','--instance-name',$Instance,'--region',$Region) | Out-Null
-        Write-Log "Deleted Lightsail instance '$Instance'" 'Green'
+    # 3. Delete ONLY the Lightsail instances THIS TOOL created (tag-gated).
+    #    Deletion is driven by the ownership tag, never by name alone, so anything
+    #    not carrying our tag - including a same-named instance you made by hand -
+    #    is left strictly untouched.
+    $ours = @(Get-OurInstances $Region)
+    if ($ours.Count -gt 0) {
+        foreach ($i in $ours) {
+            Invoke-Aws @('lightsail','delete-instance','--instance-name',$i.name,'--region',$Region) | Out-Null
+            Write-Log "Deleted Lightsail instance '$($i.name)' (tagged $TagKey=$TagValue)" 'Green'
+        }
     } else {
-        Write-Log "No Lightsail instance '$Instance' found (nothing to delete)."
+        # Nothing of ours here. If a same-named instance exists but is NOT tagged
+        # ours, refuse to delete it and hand over the exact manual command instead.
+        $other = $null
+        try { $other = (Invoke-Aws @('lightsail','get-instance','--instance-name',$Instance,'--region',$Region,'--output','json') | ConvertFrom-Json).instance } catch { }
+        if ($other) {
+            Write-Log "Instance '$Instance' exists but is NOT tagged $TagKey=$TagValue - NOT deleting it (this tool didn't create it)." 'Yellow'
+            Write-Host "  If you really want it gone, delete it yourself:" -ForegroundColor Yellow
+            Write-Host "    aws lightsail delete-instance --instance-name $Instance --region $Region" -ForegroundColor White
+        } else {
+            Write-Log 'No tool-created Lightsail instances found (nothing to delete).'
+        }
     }
 
     # 4. Wipe local secrets (keys, certs, state)

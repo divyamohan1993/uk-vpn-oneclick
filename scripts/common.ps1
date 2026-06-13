@@ -14,6 +14,15 @@ $StateDir        = $script:StateDir   # exported for callers
 # and hand to phones/laptops. Outside the repo, never committed.
 $DevicesDir      = Join-Path ([Environment]::GetFolderPath('Desktop')) 'uk-vpn-devices'
 
+# Tag identity: EVERY AWS resource this tool creates carries this tag. Teardown
+# trusts nothing else - it deletes only resources bearing this exact tag, so a
+# same-named instance you made by hand is never touched. This is the whole
+# "destroy can't nuke anything it didn't create" guarantee, in one constant.
+$script:TagKey   = 'created-by'
+$script:TagValue = 'uk-vpn-oneclick'
+$TagKey          = $script:TagKey     # exported for callers
+$TagValue        = $script:TagValue
+
 function Ensure-StateDir {
     if (-not (Test-Path $script:StateDir)) {
         New-Item -ItemType Directory -Path $script:StateDir -Force | Out-Null
@@ -118,6 +127,34 @@ function Wait-InstanceIp {
         Start-Sleep -Seconds 8
     }
     Fail "Instance '$Name' did not reach running state in time."
+}
+
+# --- tag-based ownership (the teardown safety net) -------------------------
+
+# True only if a Lightsail instance object carries OUR exact tag.
+function Test-OurTag {
+    param($Instance)   # the .instance object from get-instance / get-instances
+    if (-not $Instance -or -not $Instance.tags) { return $false }
+    foreach ($t in $Instance.tags) {
+        if ($t.key -eq $script:TagKey -and $t.value -eq $script:TagValue) { return $true }
+    }
+    return $false
+}
+
+# Idempotently stamp our tag on an instance (used on the join path / to self-heal
+# a legacy untagged instance, so teardown can later recognise it as ours).
+function Set-OurTag {
+    param([string]$Name, [string]$Region)
+    Invoke-Aws @('lightsail','tag-resource','--resource-name',$Name,'--region',$Region,
+        '--tags',"key=$($script:TagKey),value=$($script:TagValue)") | Out-Null
+}
+
+# Every instance in a region that THIS TOOL created (carries our tag). The list
+# teardown is allowed to delete - and nothing outside it.
+function Get-OurInstances {
+    param([string]$Region)
+    $j = Invoke-Aws @('lightsail','get-instances','--region',$Region,'--output','json') | ConvertFrom-Json
+    @($j.instances | Where-Object { Test-OurTag $_ })
 }
 
 # --- ssh / scp -------------------------------------------------------------

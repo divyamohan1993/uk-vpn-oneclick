@@ -33,8 +33,10 @@ encrypted traffic to one address.
    This is what keeps a forgotten server from silently costing money.
 
 3. **Creates the server** - `aws lightsail create-instances`, Ubuntu 24.04,
-   bundle `micro_3_0` in `eu-west-2` (London), dual-stack so it gets a public
-   IPv4 your home connection can reach.
+   bundle `nano_3_0` in `eu-west-2` (London), dual-stack so it gets a public
+   IPv4 your home connection can reach. The instance is **tagged**
+   `created-by=uk-vpn-oneclick` at creation, which is the only thing teardown
+   trusts (see below).
 
 4. **Locks the firewall** - `put-instance-public-ports` sets the *complete*
    rule set: SSH (22/TCP) only from your PC's current public IP, and the VPN
@@ -69,10 +71,19 @@ encrypted traffic to one address.
   unless you edit the registry and reboot. IKEv2 handles NAT natively and uses
   certificate auth, no reboot, more secure.
 
-- **`micro_3_0` (1 GB RAM), not the cheaper 512 MB `nano`.** The installer
-  compiles Libreswan from source; 512 MB runs out of memory. We also add a 2 GB
-  swap file as a belt-and-braces measure. The cost difference for a few hours is
-  a fraction of a rupee.
+- **`nano_3_0` (512 MB RAM) + a 2 GB swap file.** The installer compiles
+  Libreswan from source, which 512 MB alone can't hold, so we add a 2 GB swap
+  before the build. With that swap, the cheapest IPv4 bundle compiles and runs
+  the VPN fine (verified end-to-end). One line in `connect.ps1` switches to
+  `micro_3_0` (1 GB) if you ever want more headroom. *(The even cheaper
+  `nano_ipv6` bundles are IPv6-only, no public IPv4, so an IPv4-only home or
+  mobile network can't reach them; not usable here.)*
+
+- **Tag-gated teardown.** The server is tagged `created-by=uk-vpn-oneclick` the
+  moment it's created. `destroy.bat` deletes **only** instances carrying that
+  exact tag, so it can never remove a same-named instance you made by hand; if it
+  finds one untagged, it refuses and prints the manual delete command. The teardown
+  is driven by the tag, not by a hardcoded name.
 
 - **Ephemeral, create-and-destroy.** Lightsail bills even *stopped* instances,
   so "stop when idle" saves nothing. Deleting is the only way to reach zero, so

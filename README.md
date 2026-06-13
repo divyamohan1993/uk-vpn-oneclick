@@ -60,8 +60,8 @@ Use a **different** `device-N` per device. Full steps: **[docs/devices-guide.md]
 
 | Item | Cost |
 |---|---|
-| Server (Lightsail `micro_3_0`, billed hourly) | ~$0.01/hr -> **~₹3 for 3-4 hrs** |
-| Data transfer (3 hrs of 4K ~ 27 GB; bundle includes 2 TB) | **included** |
+| Server (Lightsail `nano_3_0`, billed hourly) | ~$0.007/hr -> **~₹2 for 3-4 hrs** |
+| Data transfer (3 hrs of 4K ~ 27 GB; bundle includes 1 TB) | **included** |
 | After `destroy.bat` | **₹0** |
 
 > The only way this gets expensive is forgetting to run `destroy.bat`. A forgotten instance bills the full ~$5/month. Set a reminder, or just run it right after watching.
