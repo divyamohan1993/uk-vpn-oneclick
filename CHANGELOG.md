@@ -3,6 +3,28 @@
 All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [SemVer](https://semver.org/).
 
+## [1.2.1] - 2026-06-13
+
+### Fixed
+- **A second IKEv2 device no longer knocks the first offline.** Every IKEv2 device
+  shared one client cert (`vpnclient`), so two devices, especially behind one
+  router/public IP, collapsed into a single connection slot on the server and evicted
+  each other (the newer connection kicked the older to "connection timed out"). The
+  server now generates **10 distinct IKEv2 identities** (`device-1`..`device-10`), one
+  per device, mirroring the WireGuard peers, so they get distinct leases and coexist.
+  Root-caused from the live pluto log (every device landed on the same lease
+  `192.168.43.10`); fix **verified live before shipping**: two real laptops on the same
+  WiFi (same public IP), distinct certs, held concurrent tunnels (leases `.10` + `.11`)
+  with zero cross-eviction while a 4K stream kept running.
+
+### Changed
+- **IKEv2 is now per-device, like WireGuard.** `connect.bat`: the laptop that creates
+  the server takes `device-1`; an additional laptop is asked once for its own number
+  (2-10, cached in state). `add-windows-device.bat` asks which `device-N` to use. The
+  device bundle now ships `device-1.p12`..`device-10.p12` + matching
+  `.mobileconfig`/`.sswan` instead of a single `vpnclient.*`. A lost device can be
+  revoked on its own (`ikev2.sh --revokeclient device-N`).
+
 ## [1.2.0] - 2026-06-13
 
 ### Added

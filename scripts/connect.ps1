@@ -45,6 +45,24 @@ try {
         $ip = Wait-InstanceIp $Instance $Region
     }
 
+    # Which IKEv2 slot is THIS laptop? Like the WireGuard QR codes, every device uses
+    # a DISTINCT identity (device-1..10) so two devices never knock each other offline.
+    # The hub that creates the server takes device-1; an additional laptop is asked once
+    # (then cached in state, so re-runs never re-ask). No silent default on join - the
+    # user must consciously pick an unused number, or the eviction bug comes straight back.
+    $prev = Load-State
+    if     ($prev -and $prev.deviceNum) { $DeviceNum = [int]$prev.deviceNum }
+    elseif ($creating)                  { $DeviceNum = 1 }
+    else {
+        Write-Host ''
+        Write-Host '  This is an ADDITIONAL device. Give it its OWN number (2-10) so it does not' -ForegroundColor Yellow
+        Write-Host '  knock another device offline - each device must be unique, like the QR codes.' -ForegroundColor Yellow
+        do { $ans = Read-Host '  Device number for THIS laptop (2-10)' }
+        until (($ans -as [int]) -and [int]$ans -ge 2 -and [int]$ans -le 10)
+        $DeviceNum = [int]$ans
+    }
+    Write-Log "This laptop uses IKEv2 identity device-$DeviceNum"
+
     # 2. Lock the firewall: SSH only from this PC's IP; VPN ports open (cert/key-protected)
     $myIp = Get-PublicIp
     Write-Log "Locking firewall (SSH from $myIp only; IKEv2 500/4500; WireGuard 51820)..."
@@ -69,11 +87,11 @@ try {
     $remote = (Get-RemoteInstallScript).Replace('__P12PASS__', $p12pass)
     Invoke-RemoteScript $pem $ip $remote
 
-    # 5. Pull the client cert + CA down (for this Windows PC)
+    # 5. Pull THIS device's client cert (device-N) + CA down (for this Windows PC)
     $p12 = Join-Path $StateDir 'vpnclient.p12'
     $ca  = Join-Path $StateDir 'vpn-ca.pem'
-    Invoke-Scp $pem "${ip}:/tmp/winclient.p12" $p12
-    Invoke-Scp $pem "${ip}:/tmp/ca.pem" $ca
+    Invoke-Scp $pem "${ip}:/tmp/devices/ikev2/device-$DeviceNum.p12" $p12
+    Invoke-Scp $pem "${ip}:/tmp/devices/ikev2/ca.pem" $ca
 
     # 5b. On first CREATE only: pull the full device bundle (WireGuard QR codes + the
     #     iPhone/Android/Linux profiles) to the Desktop. A join run skips this so it can
@@ -92,14 +110,14 @@ try {
 
     Save-State @{ instance=$Instance; region=$Region; ip=$ip; vpnName=$VpnName
                   pem=$pem; p12=$p12; ca=$ca; devicesDir=$DevicesDir
-                  tagKey=$TagKey; tagValue=$TagValue
+                  tagKey=$TagKey; tagValue=$TagValue; deviceNum=$DeviceNum
                   createdUtc=(Get-Date).ToUniversalTime().ToString('o') }
 
     # 6. Trust the CA, import the client cert, (re)create the IKEv2 connection
     Write-Log 'Importing certificate and creating the IKEv2 VPN connection...'
     # Clear stale certs from prior runs so cert selection is unambiguous.
     Get-ChildItem Cert:\LocalMachine\My   -ErrorAction SilentlyContinue |
-        Where-Object { $_.Subject -match 'CN=vpnclient' }    | Remove-Item -Force -ErrorAction SilentlyContinue
+        Where-Object { $_.Subject -match 'CN=device-\d+|CN=vpnclient' } | Remove-Item -Force -ErrorAction SilentlyContinue
     Get-ChildItem Cert:\LocalMachine\Root -ErrorAction SilentlyContinue |
         Where-Object { $_.Subject -match 'CN=IKEv2 VPN CA' } | Remove-Item -Force -ErrorAction SilentlyContinue
     Import-Certificate -FilePath $ca -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
@@ -139,7 +157,7 @@ try {
         Write-Host "    $DevicesDir" -ForegroundColor White
         Write-Host "  Open READ-ME-FIRST.md there. Quick version:" -ForegroundColor Cyan
         Write-Host "    - Phone: open wireguard\device-1.png and scan it with the WireGuard app." -ForegroundColor Gray
-        Write-Host "    - iPhone (no app): AirDrop/email ikev2\vpnclient.mobileconfig, tap to install." -ForegroundColor Gray
+        Write-Host "    - iPhone (no app): AirDrop/email a different ikev2\device-N.mobileconfig, tap to install." -ForegroundColor Gray
         Write-Host "    - Another Windows laptop: just run connect.bat there - it auto-joins this server." -ForegroundColor Gray
     }
     Write-Host '  When you are done on ALL devices, run destroy.bat to stop billing.' -ForegroundColor Green

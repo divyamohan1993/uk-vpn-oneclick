@@ -42,6 +42,20 @@ destroy.bat   (clears old certs + server)
 connect.bat   (fresh certs + server)
 ```
 
+## A second device knocks the first offline (IKEv2 / Windows native VPN)
+Fixed in **v1.2.1**. Cause: every IKEv2 device used to share one client cert, so two
+devices (especially behind the same router, hence the same public IP) collapsed into
+one connection slot on the server and evicted each other, the newer connection kicked
+the older to "connection timed out". The fix gives each device its **own** identity
+(`device-1`..`device-10`), exactly like the WireGuard peers, so they coexist. Rebuild an
+old server (`destroy.bat` then `connect.bat`) to get the per-device certs.
+
+Then make sure **each device uses a different number**: the creating laptop is
+`device-1`; an additional laptop is asked for its own number; phones pick a distinct
+`device-N.mobileconfig`. Two devices on the *same* `device-N` will still fight, just like
+reusing a WireGuard QR. Confirm on the server: `sudo ipsec trafficstatus` should list one
+line per connected device, each with a **different** `lease=` address.
+
 ## SSH errors during install ("UNPROTECTED PRIVATE KEY FILE")
 The tool restricts the key's permissions automatically. If you hit this, the
 `icacls` step was blocked, run `connect.bat` again as admin (via the .bat, which
@@ -55,6 +69,7 @@ stops billing), then `connect.bat` again.
 ## Adding more devices / a phone won't connect
 - **Another laptop with AWS access:** just run `connect.bat` there. It detects the
   existing UK server and **joins** this device to it (no new server, no extra cost).
+  It asks once for this laptop's device number (2-10), pick one no other device uses.
 - **A laptop without AWS access:** copy the repo + the `uk-vpn-devices` folder onto
   it and run `add-windows-device.bat`.
 - **Phone on mobile data:** this is expected to work, the VPN ports are open to the

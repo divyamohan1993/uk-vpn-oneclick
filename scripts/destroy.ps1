@@ -32,7 +32,7 @@ try {
 
     # 2. Remove the imported certificates (by subject; best-effort)
     Get-ChildItem Cert:\LocalMachine\My   -ErrorAction SilentlyContinue |
-        Where-Object { $_.Subject -match 'CN=vpnclient' } |
+        Where-Object { $_.Subject -match 'CN=device-\d+|CN=vpnclient' } |
         ForEach-Object { Remove-Item $_.PSPath -Force -ErrorAction SilentlyContinue; Write-Log 'Removed client certificate' }
     Get-ChildItem Cert:\LocalMachine\Root -ErrorAction SilentlyContinue |
         Where-Object { $_.Subject -match 'CN=IKEv2 VPN CA' } |

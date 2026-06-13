@@ -28,9 +28,9 @@ encrypted traffic to one address.
    certificate), the AWS CLI (installs it via winget if missing), and that your
    AWS credentials work (`aws sts get-caller-identity`).
 
-2. **Guards against double-spend** - if an instance named `uk-vpn-oneclick`
-   already exists, it stops and tells you to reconnect or run `destroy.bat`.
-   This is what keeps a forgotten server from silently costing money.
+2. **Create-or-join** - if an instance named `uk-vpn-oneclick` already exists, it
+   **joins** this device to it (no new server, no extra cost) instead of spending on
+   a second one; otherwise it creates one. Either way, only `destroy.bat` stops billing.
 
 3. **Creates the server** - `aws lightsail create-instances`, Ubuntu 24.04,
    bundle `nano_3_0` in `eu-west-2` (London), dual-stack so it gets a public
@@ -48,18 +48,20 @@ encrypted traffic to one address.
 
 6. **Installs the VPN** - over SSH it runs the
    [hwdsl2 IPsec installer](https://github.com/hwdsl2/setup-ipsec-vpn), which
-   compiles and configures Libreswan and auto-sets-up IKEv2 with a client
-   certificate. The script is sent **base64-encoded** and piped to `sudo bash`
-   so PowerShell never mangles the quoting.
+   compiles and configures Libreswan, then generates **10 distinct IKEv2 client
+   identities** (`device-1`..`device-10`) - one per device, mirroring the WireGuard
+   peers - alongside the WireGuard setup. The script is sent **base64-encoded** and
+   piped to `sudo bash` so PowerShell never mangles the quoting.
 
-7. **Exports the client identity** - re-exports the client certificate as a
-   `.p12` with a freshly generated, *known* password (the installer's own
-   password isn't surfaced), plus the CA certificate. Both are copied down.
+7. **Exports this device's identity** - each `device-N` is bundled three ways: a
+   `.p12` re-exported with a freshly generated, *known* password (for Windows import),
+   plus the iOS `.mobileconfig` / Android `.sswan` straight from the installer. This
+   laptop pulls down its own `device-N.p12` and the CA certificate.
 
 8. **Configures Windows** - imports the CA into *Trusted Root* (so the server
-   cert validates), imports the client `.p12` into the machine's *Personal*
-   store, then creates an IKEv2 connection using **machine-certificate** auth
-   and a crypto policy proven to match the server.
+   cert validates), imports this device's `device-N` `.p12` into the machine's
+   *Personal* store, then creates an IKEv2 connection using **machine-certificate**
+   auth and a crypto policy proven to match the server.
 
 9. **Connects and verifies** - dials the connection and queries a geo-IP API.
    If your IP now resolves to `GB`, you're set.
@@ -70,6 +72,13 @@ encrypted traffic to one address.
   L2TP to a cloud server behind 1:1 NAT (which AWS uses) fails with *error 809*
   unless you edit the registry and reboot. IKEv2 handles NAT natively and uses
   certificate auth, no reboot, more secure.
+
+- **One identity per device.** Every device gets its own IKEv2 client cert
+  (`device-1`..`device-10`), like the WireGuard peers. A single shared cert made two
+  devices behind one NAT collapse into one server slot and evict each other (the newer
+  connection kicked the older to a "connection timed out"); distinct identities get
+  distinct leases and coexist. A lost device can also be revoked on its own
+  (`ikev2.sh --revokeclient device-N`) without disturbing the others.
 
 - **`nano_3_0` (512 MB RAM) + a 2 GB swap file.** The installer compiles
   Libreswan from source, which 512 MB alone can't hold, so we add a 2 GB swap

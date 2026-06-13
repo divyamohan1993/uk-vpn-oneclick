@@ -251,14 +251,19 @@ if [ ! -f /opt/.vpn-installed ]; then
   VPN_IPSEC_PSK="$(openssl rand -base64 24)" VPN_USER=vpnuser VPN_PASSWORD="$(openssl rand -base64 18)" sh /tmp/vpn.sh
   touch /opt/.vpn-installed
 fi
-if ! certutil -L -d sql:/etc/ipsec.d 2>/dev/null | grep -q vpnclient; then
-  VPN_CLIENT_NAME=vpnclient ikev2.sh --auto || true
+# Per-device IKEv2 identities device-1..N, mirroring WireGuard's per-device peers.
+# Each device uses its OWN cert. Two devices behind one NAT sharing a single cert
+# evicted each other (Libreswan keys the connection slot + lease by identity);
+# distinct certs let them coexist - validated live before this was written.
+IKEV2_POOL=10
+if ! ikev2.sh --listclients 2>/dev/null | grep -qw device-1; then
+  VPN_CLIENT_NAME=device-1 ikev2.sh --auto || true   # first client also creates the server cert + conn
 fi
-# Regenerate the full client set (.p12 / .mobileconfig / .sswan) + a known-password .p12
-ikev2.sh --exportclient vpnclient >/dev/null 2>&1 || true
-pk12util -o /tmp/winclient.p12 -n vpnclient -d sql:/etc/ipsec.d -W "__P12PASS__" -K ""
+for i in $(seq 2 $IKEV2_POOL); do
+  ikev2.sh --listclients 2>/dev/null | grep -qw "device-$i" || ikev2.sh --addclient "device-$i" >/dev/null 2>&1 || true
+done
 certutil -L -d sql:/etc/ipsec.d -n "IKEv2 VPN CA" -a > /tmp/ca.pem
-chmod 644 /tmp/winclient.p12 /tmp/ca.pem   # readable by the 'ubuntu' (scp) user
+chmod 644 /tmp/ca.pem   # readable by the 'ubuntu' (scp) user
 
 # --- staging for the config bundle (rebuilt every run) ---
 rm -rf /tmp/devices; mkdir -p /tmp/devices/wireguard /tmp/devices/ikev2
@@ -309,10 +314,15 @@ WG
 fi
 
 # --- bundle the IKEv2 configs (every run, for this device + handoff) ---
-cp /tmp/winclient.p12 /tmp/devices/ikev2/vpnclient.p12 2>/dev/null || true
+# One profile set per device identity:
+#   device-N.p12        re-exported with our KNOWN password (Windows import)
+#   device-N.mobileconfig / .sswan   from ikev2.sh (iOS/Android; password embedded)
 cp /tmp/ca.pem /tmp/devices/ikev2/ca.pem 2>/dev/null || true
-cp /home/ubuntu/vpnclient.mobileconfig /tmp/devices/ikev2/ 2>/dev/null || true
-cp /home/ubuntu/vpnclient.sswan /tmp/devices/ikev2/ 2>/dev/null || true
+for i in $(seq 1 $IKEV2_POOL); do
+  pk12util -o /tmp/devices/ikev2/device-$i.p12 -n "device-$i" -d sql:/etc/ipsec.d -W "__P12PASS__" -K "" >/dev/null 2>&1 || true
+  cp /home/ubuntu/device-$i.mobileconfig /tmp/devices/ikev2/ 2>/dev/null || true
+  cp /home/ubuntu/device-$i.sswan /tmp/devices/ikev2/ 2>/dev/null || true
+done
 printf '%s' "$PUBIP" > /tmp/devices/server-ip.txt
 find /tmp/devices -type d -exec chmod 755 {} \;
 find /tmp/devices -type f -exec chmod 644 {} \;

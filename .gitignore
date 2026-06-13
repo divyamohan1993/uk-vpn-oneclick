@@ -10,6 +10,9 @@
 ca.pem
 vpn-ca.pem
 vpnclient.*
+device-*.p12
+*.mobileconfig
+*.sswan
 state.json
 log.txt
 ikev2-result.txt

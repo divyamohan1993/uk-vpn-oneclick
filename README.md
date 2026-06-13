@@ -50,7 +50,7 @@ To reconnect later **without** rebuilding (while the server still exists): open
 
 `connect.bat` also drops a **`uk-vpn-devices`** folder on your Desktop with everything for every other device, including **WireGuard QR codes**. Same server, any number of devices:
 
-- 📱 **Android / iPhone** -> install the **WireGuard** app, scan `wireguard/device-N.png`. (iPhone can also go app-free: tap `ikev2/vpnclient.mobileconfig`.)
+- 📱 **Android / iPhone** -> install the **WireGuard** app, scan `wireguard/device-N.png`. (iPhone can also go app-free: tap a `ikev2/device-N.mobileconfig`.)
 - 💻 **Another Windows laptop** -> just run **`connect.bat`** there; if the UK server already exists it **auto-joins** this laptop to it. (No AWS on that laptop? Copy the repo + `uk-vpn-devices` and run **`add-windows-device.bat`**.)
 - 🐧 **Linux** -> `./setup-linux.sh 4` (WireGuard, one command).
 

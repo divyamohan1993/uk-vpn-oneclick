@@ -13,17 +13,27 @@ try {
     if (-not (Test-Path $dev)) { throw "Copy the 'uk-vpn-devices' folder onto this PC's Desktop first (not found at $dev)." }
 
     $ik  = Join-Path $dev 'ikev2'
-    $p12 = Join-Path $ik 'vpnclient.p12'
+    # Every device uses its OWN identity (device-1..10), exactly like the WireGuard QR
+    # codes, so two devices never knock each other offline. The laptop that created the
+    # server is device-1; pick a number not used by any other device.
+    Write-Host ''
+    Write-Host '  Pick a device number for THIS laptop (1-10) that no other device is using' -ForegroundColor Yellow
+    Write-Host '  (the laptop that set up the server is device-1).' -ForegroundColor Yellow
+    do { $ans = Read-Host '  Device number for THIS laptop (1-10)' }
+    until (($ans -as [int]) -and [int]$ans -ge 1 -and [int]$ans -le 10)
+    $num = [int]$ans
+    $p12 = Join-Path $ik "device-$num.p12"
     $ca  = Join-Path $ik 'ca.pem'
     $ip  = (Get-Content (Join-Path $dev 'server-ip.txt') -Raw).Trim()
     $pw  = (Get-Content (Join-Path $ik 'IMPORT-PASSWORD.txt') -Raw).Trim()
-    foreach ($f in $p12, $ca) { if (-not (Test-Path $f)) { throw "Missing $f in the bundle." } }
+    foreach ($f in $p12, $ca) { if (-not (Test-Path $f)) { throw "Missing $f (need device-$num.p12 in the bundle - is the 'uk-vpn-devices' folder current?)." } }
+    Write-Host "  Using IKEv2 identity device-$num." -ForegroundColor Cyan
 
     Write-Host "Setting up '$VpnName' -> server $ip ..." -ForegroundColor Cyan
 
     # Clear any stale certs, then import this server's CA + client cert.
     Get-ChildItem Cert:\LocalMachine\My   -ErrorAction SilentlyContinue |
-        Where-Object { $_.Subject -match 'CN=vpnclient' }    | Remove-Item -Force -ErrorAction SilentlyContinue
+        Where-Object { $_.Subject -match 'CN=device-\d+|CN=vpnclient' } | Remove-Item -Force -ErrorAction SilentlyContinue
     Get-ChildItem Cert:\LocalMachine\Root -ErrorAction SilentlyContinue |
         Where-Object { $_.Subject -match 'CN=IKEv2 VPN CA' } | Remove-Item -Force -ErrorAction SilentlyContinue
     Import-Certificate -FilePath $ca -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
