@@ -21,6 +21,10 @@ ikev2-result.txt
 .aws/
 credentials
 
+# Python build artifacts (janitor Lambda)
+__pycache__/
+*.pyc
+
 # OS noise
 Thumbs.db
 desktop.ini

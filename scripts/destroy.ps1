@@ -23,8 +23,11 @@ try {
     Write-Log '=== UK VPN one-click: DESTROY ===' 'Cyan'
     Assert-Admin
 
-    # 1. Disconnect + remove the Windows VPN connection
+    # 1. Disconnect + remove the Windows VPN connection(s). Remove-OwnVpns clears every
+    #    entry this tool recorded creating on this device (only its own); the named
+    #    removal is a fallback for a pre-tracking entry. Runs before the state wipe (4).
     rasdial $VpnName /disconnect 2>$null | Out-Null
+    Remove-OwnVpns
     Get-VpnConnection -AllUserConnection -Name $VpnName -ErrorAction SilentlyContinue | ForEach-Object {
         Remove-VpnConnection -Name $VpnName -AllUserConnection -Force
         Write-Log "Removed Windows VPN connection '$VpnName'"

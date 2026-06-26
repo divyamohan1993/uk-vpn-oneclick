@@ -13,6 +13,7 @@ $Bundle    = 'micro_3_0'        # 1 GB RAM. nano (512 MB) is cheaper but risks O
 $Blueprint = 'ubuntu_24_04'
 $Instance  = 'uk-vpn-oneclick'
 $VpnName   = 'UK VPN (one-click)'
+$TtlHours  = 5                  # ephemeral: the box self-deletes ~5h after creation (janitor enforces)
 # --------------------------------------------------------------------------
 
 try {
@@ -29,14 +30,17 @@ try {
     $creating = -not (Test-InstanceExists $Instance $Region)
     if ($creating) {
         Write-Log "No UK server yet - creating one ($Bundle, London $Region)..."
-        # Born tagged ($TagKey=$TagValue): the tag is applied atomically at creation,
-        # so even a half-finished create is recognisable - and deletable - by destroy.
+        # Born tagged, atomically at creation:
+        #   created-by  - lets destroy.bat AND the janitor recognise it as ours.
+        #   expires-at  - epoch deadline; the janitor deletes the box once it passes
+        #                 (with a 24h hard cap), so a forgotten VPS can't bill forever.
+        $expiresAt = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() + ($TtlHours * 3600)
         Invoke-Aws @('lightsail','create-instances','--instance-names',$Instance,
             '--availability-zone',$Zone,'--blueprint-id',$Blueprint,'--bundle-id',$Bundle,
             '--ip-address-type','dualstack','--region',$Region,
-            '--tags',"key=$TagKey,value=$TagValue") | Out-Null
+            '--tags',"key=$TagKey,value=$TagValue","key=expires-at,value=$expiresAt") | Out-Null
         $ip = Wait-InstanceIp $Instance $Region
-        Write-Log "Instance running at $ip" 'Green'
+        Write-Log "Instance running at $ip (auto-deletes in ~$TtlHours h)" 'Green'
     } else {
         Write-Log "UK server already exists - joining THIS device to it (no new server, no extra cost)." 'Green'
         # Self-heal: stamp our tag in case this instance predates tag-aware connect,
@@ -45,23 +49,10 @@ try {
         $ip = Wait-InstanceIp $Instance $Region
     }
 
-    # Which IKEv2 slot is THIS laptop? Like the WireGuard QR codes, every device uses
-    # a DISTINCT identity (device-1..10) so two devices never knock each other offline.
-    # The hub that creates the server takes device-1; an additional laptop is asked once
-    # (then cached in state, so re-runs never re-ask). No silent default on join - the
-    # user must consciously pick an unused number, or the eviction bug comes straight back.
-    $prev = Load-State
-    if     ($prev -and $prev.deviceNum) { $DeviceNum = [int]$prev.deviceNum }
-    elseif ($creating)                  { $DeviceNum = 1 }
-    else {
-        Write-Host ''
-        Write-Host '  This is an ADDITIONAL device. Give it its OWN number (2-10) so it does not' -ForegroundColor Yellow
-        Write-Host '  knock another device offline - each device must be unique, like the QR codes.' -ForegroundColor Yellow
-        do { $ans = Read-Host '  Device number for THIS laptop (2-10)' }
-        until (($ans -as [int]) -and [int]$ans -ge 2 -and [int]$ans -le 10)
-        $DeviceNum = [int]$ans
-    }
-    Write-Log "This laptop uses IKEv2 identity device-$DeviceNum"
+    # Each device uses its OWN IKEv2 identity (device-1..10), like the WireGuard QR codes,
+    # so two devices behind one NAT never knock each other offline. The slot is claimed
+    # AUTOMATICALLY from the server once SSH is up (keyed by this machine's id), so there
+    # is no prompt and re-runs reclaim the same slot. See "auto-claim" below.
 
     # 2. Lock the firewall: SSH only from this PC's IP; VPN ports open (cert/key-protected)
     $myIp = Get-PublicIp
@@ -87,16 +78,24 @@ try {
     $remote = (Get-RemoteInstallScript).Replace('__P12PASS__', $p12pass)
     Invoke-RemoteScript $pem $ip $remote
 
+    # 4b. Auto-claim a device slot from the server (no prompt). Keyed by this machine's
+    #     stable id, so re-runs reclaim the same slot and a new laptop gets the next free
+    #     one. The server's registry is the source of truth (it resets with each new box).
+    $machineId = Get-StableMachineId   # 16 hex chars: clone-distinct, no raw fingerprint
+    $DeviceNum = Claim-DeviceSlot $pem $ip $machineId
+    Write-Log "This laptop auto-claimed IKEv2 identity device-$DeviceNum"
+
     # 5. Pull THIS device's client cert (device-N) + CA down (for this Windows PC)
     $p12 = Join-Path $StateDir 'vpnclient.p12'
     $ca  = Join-Path $StateDir 'vpn-ca.pem'
     Invoke-Scp $pem "${ip}:/tmp/devices/ikev2/device-$DeviceNum.p12" $p12
     Invoke-Scp $pem "${ip}:/tmp/devices/ikev2/ca.pem" $ca
 
-    # 5b. On first CREATE only: pull the full device bundle (WireGuard QR codes + the
-    #     iPhone/Android/Linux profiles) to the Desktop. A join run skips this so it can
-    #     never wipe the phone QR codes the hub laptop already holds.
-    if ($creating) {
+    # 5b. Pull the full device bundle (WireGuard QR codes + iPhone/Android/Linux profiles)
+    #     to the Desktop. Done on CREATE, and also on a join if the bundle is MISSING (so a
+    #     create whose bundle copy failed can be recovered without destroy+recreate). A join
+    #     that already HAS the bundle skips this, so it never wipes the phone QR codes.
+    if ($creating -or -not (Test-Path $DevicesDir)) {
         Write-Log 'Downloading device configs (WireGuard QR codes + phone/laptop profiles)...'
         if (Test-Path $DevicesDir) { Remove-Item $DevicesDir -Recurse -Force -ErrorAction SilentlyContinue }
         Invoke-Scp $pem "${ip}:/tmp/devices" $DevicesDir -Recurse
@@ -124,11 +123,16 @@ try {
     $sec = ConvertTo-SecureString $p12pass -AsPlainText -Force
     Import-PfxCertificate -FilePath $p12 -CertStoreLocation Cert:\LocalMachine\My -Password $sec | Out-Null
 
+    # Remove only the VPN entries THIS tool recorded creating on this device (no bloat,
+    # never touches your other VPNs), plus the exact current name for clean re-create,
+    # then add the fresh one and record it.
+    Remove-OwnVpns
     Get-VpnConnection -AllUserConnection -Name $VpnName -ErrorAction SilentlyContinue |
         ForEach-Object { Remove-VpnConnection -Name $VpnName -AllUserConnection -Force }
     Add-VpnConnection -Name $VpnName -ServerAddress $ip -TunnelType IKEv2 `
         -AuthenticationMethod MachineCertificate -EncryptionLevel Required `
         -AllUserConnection -RememberCredential -Force
+    Record-OwnVpn $VpnName
     # Crypto policy that matches the server (proven values from a live setup)
     Set-VpnConnectionIPsecConfiguration -ConnectionName $VpnName `
         -AuthenticationTransformConstants GCMAES128 -CipherTransformConstants GCMAES128 `

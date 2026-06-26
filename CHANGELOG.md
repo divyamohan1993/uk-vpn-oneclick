@@ -3,6 +3,32 @@
 All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [SemVer](https://semver.org/).
 
+## [1.3.0] - 2026-06-26
+
+### Added
+- **Ephemeral, self-deleting servers.** Each box is tagged `expires-at = now+5h`, and a
+  new **janitor** (AWS Lambda + EventBridge, every 15 min) deletes it once expired, with
+  a 24h hard cap as an anti-tamper backstop. A forgotten VPS can no longer keep billing
+  or stay attackable. Deploy once with admin creds: `setup-janitor.ps1` (undo with
+  `teardown-janitor.ps1`). Cost is **$0** within AWS Always-Free (Lambda 1M req + 400k
+  GB-s, EventBridge 14M, Logs 5GB, all perpetual), enforced by 1-day log retention, no
+  provisioned concurrency, and an optional `$0.01` budget tripwire.
+- **`join.bat`** - the friendly name for adding an extra laptop. A laptop with the AWS
+  CLI authenticated just double-clicks it; no password, no file transfer.
+- **Auto-assigned device slots.** Joining no longer prompts for a number: the server
+  hands each machine a free IKEv2 slot (1-10) keyed by its machine id (flock'd and
+  idempotent, so the same laptop reclaims its slot and a new one gets the next free).
+
+### Changed
+- The Windows VPN entry is now **state-tracked**: connect/destroy clean up only the
+  entries this tool created, never your other VPNs.
+
+### Security
+- Repo stays secret-free; no Cloudflare; the VPS holds only VPN config (never AWS creds).
+- Laptop creds stay Lightsail-only; the janitor runs on its own scoped IAM role with no
+  stored keys. Full design + threat model:
+  `docs/dmj/specs/2026-06-26-ephemeral-vpn-janitor-design.md`.
+
 ## [1.2.1] - 2026-06-13
 
 ### Fixed
