@@ -16,6 +16,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [S
   `192.168.43.10`); fix **verified live before shipping**: two real laptops on the same
   WiFi (same public IP), distinct certs, held concurrent tunnels (leases `.10` + `.11`)
   with zero cross-eviction while a 4K stream kept running.
+- **Fresh-create now generates all 10 IKEv2 identities.** `device-1` was created via
+  `ikev2.sh --auto`, but the hwdsl2 base install already initialises IKEv2 (claiming the
+  default `vpnclient`), so `--auto` errored *"already set up"* and `device-1` was never
+  made, breaking `connect.bat` at `scp device-1.p12`. Every identity (`device-1`..`device-10`)
+  is now added with `--addclient`, and the server-side install **fails loudly** if any
+  cert is missing instead of producing an opaque scp error. Verified on a clean fresh
+  create: device-1..10 all valid, full bundle built, GB exit confirmed.
 
 ### Changed
 - **IKEv2 is now per-device, like WireGuard.** `connect.bat`: the laptop that creates

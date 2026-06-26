@@ -9,7 +9,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------- config (edit here to change region/size) ----------------
 $Region    = 'eu-west-2'        # London
 $Zone      = 'eu-west-2a'
-$Bundle    = 'nano_3_0'         # 512 MB RAM (+2 GB swap). Cheaper; risk is OOM compiling Libreswan - testing it.
+$Bundle    = 'micro_3_0'        # 1 GB RAM. nano (512 MB) is cheaper but risks OOM compiling Libreswan.
 $Blueprint = 'ubuntu_24_04'
 $Instance  = 'uk-vpn-oneclick'
 $VpnName   = 'UK VPN (one-click)'

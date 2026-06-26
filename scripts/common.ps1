@@ -255,11 +255,16 @@ fi
 # Each device uses its OWN cert. Two devices behind one NAT sharing a single cert
 # evicted each other (Libreswan keys the connection slot + lease by identity);
 # distinct certs let them coexist - validated live before this was written.
+#
+# The hwdsl2 base install ALREADY initialises IKEv2 with a default 'vpnclient' cert,
+# so `ikev2.sh --auto` here errors "IKEv2 is already set up" and device-1 never gets
+# made (the bug that broke the fresh-create path). We therefore add EVERY identity,
+# device-1 included, with --addclient: the correct non-interactive call on an
+# already-set-up server. The --auto fallback only fires on the (unlikely) future
+# image where the base install left IKEv2 unconfigured.
 IKEV2_POOL=10
-if ! ikev2.sh --listclients 2>/dev/null | grep -qw device-1; then
-  VPN_CLIENT_NAME=device-1 ikev2.sh --auto || true   # first client also creates the server cert + conn
-fi
-for i in $(seq 2 $IKEV2_POOL); do
+ikev2.sh --listclients >/dev/null 2>&1 || ikev2.sh --auto || true
+for i in $(seq 1 $IKEV2_POOL); do
   ikev2.sh --listclients 2>/dev/null | grep -qw "device-$i" || ikev2.sh --addclient "device-$i" >/dev/null 2>&1 || true
 done
 certutil -L -d sql:/etc/ipsec.d -n "IKEv2 VPN CA" -a > /tmp/ca.pem
@@ -326,6 +331,18 @@ done
 printf '%s' "$PUBIP" > /tmp/devices/server-ip.txt
 find /tmp/devices -type d -exec chmod 755 {} \;
 find /tmp/devices -type f -exec chmod 644 {} \;
+
+# Fail LOUDLY (and early) if any device cert didn't materialise, so connect.ps1 stops
+# here with a clear reason instead of a downstream opaque scp "No such file" error.
+MISSING=""
+for i in $(seq 1 $IKEV2_POOL); do
+  [ -s /tmp/devices/ikev2/device-$i.p12 ] || MISSING="$MISSING device-$i"
+done
+if [ -n "$MISSING" ]; then
+  echo "REMOTE_FAIL: IKEv2 client certs missing:$MISSING" >&2
+  echo "  ikev2.sh --addclient likely failed; on the server run: sudo ikev2.sh --listclients" >&2
+  exit 1
+fi
 echo REMOTE_DONE_OK
 '@
 }
