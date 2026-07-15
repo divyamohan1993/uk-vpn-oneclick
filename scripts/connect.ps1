@@ -54,12 +54,15 @@ try {
     # AUTOMATICALLY from the server once SSH is up (keyed by this machine's id), so there
     # is no prompt and re-runs reclaim the same slot. See "auto-claim" below.
 
-    # 2. Lock the firewall: SSH only from this PC's IP; VPN ports open (cert/key-protected)
-    $myIp = Get-PublicIp
-    Write-Log "Locking firewall (SSH from $myIp only; IKEv2 500/4500; WireGuard 51820)..."
+    # 2. Open the firewall for setup. SSH is needed ONLY during setup and is key-only
+    #    (no password + fail2ban on the box). Pinning it to this PC's IP breaks on CGNAT/
+    #    mobile: the public IP rotates mid-setup and the /32 pin locks us out of our own
+    #    box (the bug this fixes). So open 22 for the setup window; step 5c CLOSES it again
+    #    afterward, so the resting state has NO management port exposed. VPN ports stay open.
+    Write-Log 'Opening firewall for setup (SSH key-only, closed again after setup; IKEv2 500/4500; WireGuard 51820)...'
     Invoke-Aws @('lightsail','put-instance-public-ports','--instance-name',$Instance,'--region',$Region,
         '--port-infos',
-        "fromPort=22,toPort=22,protocol=TCP,cidrs=$myIp/32",
+        'fromPort=22,toPort=22,protocol=TCP,cidrs=0.0.0.0/0',
         'fromPort=500,toPort=500,protocol=UDP,cidrs=0.0.0.0/0',
         'fromPort=4500,toPort=4500,protocol=UDP,cidrs=0.0.0.0/0',
         'fromPort=51820,toPort=51820,protocol=UDP,cidrs=0.0.0.0/0') | Out-Null
@@ -106,6 +109,19 @@ try {
         if (Test-Path $ik) { Set-Content -Path (Join-Path $ik 'IMPORT-PASSWORD.txt') -Value $p12pass -Encoding ascii }
         Write-Log "Device configs (incl. phone QR codes) saved to: $DevicesDir" 'Green'
     }
+
+    # 5c. Setup is done - SSH is no longer needed, so CLOSE port 22. The VPN itself never
+    #     uses SSH, so nothing you rely on breaks; the box now exposes only the VPN ports.
+    #     A future connect/join re-opens 22 for its own setup window (step 2) and closes it
+    #     again here. This is best-effort: if it fails, the box is still key-only + fail2ban.
+    Write-Log 'Setup done - closing SSH (port 22); only VPN ports remain open...'
+    try {
+        Invoke-Aws @('lightsail','put-instance-public-ports','--instance-name',$Instance,'--region',$Region,
+            '--port-infos',
+            'fromPort=500,toPort=500,protocol=UDP,cidrs=0.0.0.0/0',
+            'fromPort=4500,toPort=4500,protocol=UDP,cidrs=0.0.0.0/0',
+            'fromPort=51820,toPort=51820,protocol=UDP,cidrs=0.0.0.0/0') | Out-Null
+    } catch { Write-Log "  (could not close port 22: $($_.Exception.Message) - box is still key-only)" 'Yellow' }
 
     Save-State @{ instance=$Instance; region=$Region; ip=$ip; vpnName=$VpnName
                   pem=$pem; p12=$p12; ca=$ca; devicesDir=$DevicesDir

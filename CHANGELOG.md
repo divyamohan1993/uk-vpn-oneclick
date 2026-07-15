@@ -23,6 +23,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [S
 - The Windows VPN entry is now **state-tracked**: connect/destroy clean up only the
   entries this tool created, never your other VPNs.
 
+### Fixed
+- **SSH lockout when the home IP rotates mid-setup.** connect pinned SSH to the public
+  IP at firewall-lock time; on CGNAT/mobile that IP rotates during the ~5-min install
+  (seen live: `202.160.132.4` -> `.15`), so SSH from the new IP was blocked and setup
+  failed with "SSH never became reachable." SSH (key-only, fail2ban-guarded) is now
+  opened for the setup window and **port 22 is closed again right after** - never pinned
+  to a moving IP, and the resting box exposes only the VPN ports (tighter than before).
+
 ### Security
 - Repo stays secret-free; no Cloudflare; the VPS holds only VPN config (never AWS creds).
 - Laptop creds stay Lightsail-only; the janitor runs on its own scoped IAM role with no
