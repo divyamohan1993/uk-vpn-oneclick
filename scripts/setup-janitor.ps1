@@ -52,6 +52,10 @@ try {
                'ca-central-1','ap-south-1','ap-southeast-1','ap-northeast-1','ap-southeast-2'
     $RegionCsv = $Regions -join ','
     $RegionListJson = ($Regions | ForEach-Object { '"' + $_ + '"' }) -join ','
+    # --environment must be a JSON FILE: the shorthand Variables={} breaks on the commas
+    # in the region list.
+    $janEnvFile = Join-Path $env:TEMP 'ukjanitor-env.json'
+    (@{ Variables = @{ TARGET_REGIONS = $RegionCsv } } | ConvertTo-Json -Compress) | Set-Content $janEnvFile -Encoding ascii
 
     # 1. IAM role the Lambda runs as (delete-only on Lightsail + write its own logs).
     $trust = Join-Path $env:TEMP 'ukjanitor-trust.json'
@@ -92,7 +96,7 @@ try {
             '--zip-file',"fileb://$zip") | Out-Null
         Invoke-Aws @('lambda','wait','function-updated','--function-name',$FnName,'--region',$Region) | Out-Null
         Invoke-Aws @('lambda','update-function-configuration','--function-name',$FnName,'--region',$Region,
-            '--environment',"Variables={TARGET_REGIONS=$RegionCsv}") | Out-Null
+            '--environment',"file://$janEnvFile") | Out-Null
     } else {
         Write-Log 'Creating Lambda (retrying for IAM role propagation)...'
         $created = $false
@@ -101,7 +105,7 @@ try {
                 Invoke-Aws @('lambda','create-function','--function-name',$FnName,'--region',$Region,
                     '--runtime','python3.12','--handler','janitor.handler','--timeout','120',
                     '--memory-size','128','--role',$roleArn,'--zip-file',"fileb://$zip",
-                    '--environment',"Variables={TARGET_REGIONS=$RegionCsv}") | Out-Null
+                    '--environment',"file://$janEnvFile") | Out-Null
                 $created = $true
             } catch {
                 if ($_.Exception.Message -match 'cannot be assumed|InvalidParameterValueException') {

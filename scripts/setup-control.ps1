@@ -93,7 +93,17 @@ try {
     Compress-Archive -Path (Join-Path $build '*') -DestinationPath $zip -Force
 
     # --- Lambda (create or update). FUNC_URL is filled in after the URL exists. ---
-    $envVars = "Variables={TABLE=$Table,PW_SALT=$saltHex,PW_HASH=$hashHex,SESSION_SECRET=$sessSecret,PBKDF2_ITERS=$iters,REGIONS_JSON=$RegionsJson,FUNC_URL=https://placeholder}"
+    # Write --environment as a JSON FILE (shorthand Variables={} breaks on commas/= inside
+    # REGIONS_JSON). $mkEnv writes the file for a given FUNC_URL and returns file://path.
+    $envFile = Join-Path $env:TEMP 'ukctl-env.json'
+    $mkEnv = {
+        param($furl)
+        (@{ Variables = [ordered]@{ TABLE=$Table; PW_SALT=$saltHex; PW_HASH=$hashHex
+            SESSION_SECRET=$sessSecret; PBKDF2_ITERS="$iters"; REGIONS_JSON=$RegionsJson
+            FUNC_URL=$furl } } | ConvertTo-Json -Depth 6 -Compress) | Set-Content $envFile -Encoding ascii
+        "file://$envFile"
+    }
+    $envArg = & $mkEnv 'https://placeholder'
     $exists = $null; try { $exists = Invoke-Aws @('lambda','get-function','--function-name',$Fn,'--region',$Region,'--output','json') } catch {}
     if ($exists) {
         Write-Log 'Updating Lambda code + config...'
@@ -104,12 +114,22 @@ try {
         $ok=$false; for($i=0;$i -lt 10 -and -not $ok;$i++){ try {
             Invoke-Aws @('lambda','create-function','--function-name',$Fn,'--region',$Region,'--runtime','python3.12',
                 '--handler','control.handler','--timeout','30','--memory-size','256','--role',$roleArn,
-                '--zip-file',"fileb://$zip",'--environment',$envVars) | Out-Null; $ok=$true
+                '--zip-file',"fileb://$zip",'--environment',$envArg) | Out-Null; $ok=$true
         } catch { if($_.Exception.Message -match 'cannot be assumed|InvalidParameterValue'){Start-Sleep 6}else{throw} } }
         if(-not $ok){ Fail 'Lambda create failed.' }
     }
-    # reserved concurrency (the real-time flood cost cap)
-    Invoke-Aws @('lambda','put-function-concurrency','--function-name',$Fn,'--region',$Region,'--reserved-concurrent-executions','5') | Out-Null
+    # reserved concurrency = the real-time flood cost cap. AWS requires the account to keep
+    # >=10 unreserved, so only set it if the account limit allows; otherwise the (already low)
+    # account-wide concurrency limit itself bounds a flood.
+    try {
+        $lim = [int](Invoke-Aws @('lambda','get-account-settings','--region',$Region,'--output','json') | ConvertFrom-Json).AccountLimit.ConcurrentExecutions
+        if ($lim -ge 15) {
+            Invoke-Aws @('lambda','put-function-concurrency','--function-name',$Fn,'--region',$Region,'--reserved-concurrent-executions','5') | Out-Null
+            Write-Log 'Reserved concurrency = 5 (flood cost cap).'
+        } else {
+            Write-Log "Account concurrency limit is $lim (low) - the account cap itself bounds a flood; skipping reservation." 'Yellow'
+        }
+    } catch { Write-Log "  (reserved-concurrency skipped: $($_.Exception.Message))" 'Yellow' }
     # 1-day log retention
     Aws-Idem @('logs','create-log-group','--log-group-name',$LogGrp,'--region',$Region) | Out-Null
     Invoke-Aws @('logs','put-retention-policy','--log-group-name',$LogGrp,'--region',$Region,'--retention-in-days','1') | Out-Null
@@ -124,9 +144,9 @@ try {
     }
     $furlTrim = $furl.TrimEnd('/')
     # now that the URL is known, put it into the env (the box beacon needs it)
-    $envVars2 = "Variables={TABLE=$Table,PW_SALT=$saltHex,PW_HASH=$hashHex,SESSION_SECRET=$sessSecret,PBKDF2_ITERS=$iters,REGIONS_JSON=$RegionsJson,FUNC_URL=$furlTrim}"
+    $envArg2 = & $mkEnv $furlTrim
     Invoke-Aws @('lambda','wait','function-updated','--function-name',$Fn,'--region',$Region) | Out-Null
-    Invoke-Aws @('lambda','update-function-configuration','--function-name',$Fn,'--region',$Region,'--environment',$envVars2) | Out-Null
+    Invoke-Aws @('lambda','update-function-configuration','--function-name',$Fn,'--region',$Region,'--environment',$envArg2) | Out-Null
 
     # --- GitHub OIDC provider + scoped deploy role (CI/CD, no stored keys) ---
     Write-Log 'GitHub OIDC deploy role...'
