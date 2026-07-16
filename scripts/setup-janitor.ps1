@@ -47,6 +47,12 @@ try {
     $acct = (Invoke-Aws @('sts','get-caller-identity','--output','json') | ConvertFrom-Json).Account
     Write-Log "Account $acct, region $Region"
 
+    # Regions the janitor sweeps - must cover every region the control panel can use.
+    $Regions = 'eu-west-2','eu-central-1','eu-west-1','eu-north-1','us-east-1','us-west-2',
+               'ca-central-1','ap-south-1','ap-southeast-1','ap-northeast-1','ap-southeast-2'
+    $RegionCsv = $Regions -join ','
+    $RegionListJson = ($Regions | ForEach-Object { '"' + $_ + '"' }) -join ','
+
     # 1. IAM role the Lambda runs as (delete-only on Lightsail + write its own logs).
     $trust = Join-Path $env:TEMP 'ukjanitor-trust.json'
     # Scope the assume-role to THIS account (confused-deputy guard).
@@ -65,7 +71,7 @@ try {
     @"
 {"Version":"2012-10-17","Statement":[
  {"Effect":"Allow","Action":"lightsail:GetInstances","Resource":"*"},
- {"Effect":"Allow","Action":"lightsail:DeleteInstance","Resource":"arn:aws:lightsail:$($Region):$($acct):Instance/*"},
+ {"Effect":"Allow","Action":"lightsail:DeleteInstance","Resource":"*","Condition":{"StringEquals":{"aws:RequestedRegion":[$RegionListJson]}}},
  {"Effect":"Allow","Action":["logs:CreateLogGroup","logs:CreateLogStream","logs:PutLogEvents"],"Resource":"*"}
 ]}
 "@ | Set-Content $perm -Encoding ascii
@@ -86,16 +92,16 @@ try {
             '--zip-file',"fileb://$zip") | Out-Null
         Invoke-Aws @('lambda','wait','function-updated','--function-name',$FnName,'--region',$Region) | Out-Null
         Invoke-Aws @('lambda','update-function-configuration','--function-name',$FnName,'--region',$Region,
-            '--environment',"Variables={TARGET_REGION=$Region}") | Out-Null
+            '--environment',"Variables={TARGET_REGIONS=$RegionCsv}") | Out-Null
     } else {
         Write-Log 'Creating Lambda (retrying for IAM role propagation)...'
         $created = $false
         for ($i=0; $i -lt 10 -and -not $created; $i++) {
             try {
                 Invoke-Aws @('lambda','create-function','--function-name',$FnName,'--region',$Region,
-                    '--runtime','python3.12','--handler','janitor.handler','--timeout','60',
+                    '--runtime','python3.12','--handler','janitor.handler','--timeout','120',
                     '--memory-size','128','--role',$roleArn,'--zip-file',"fileb://$zip",
-                    '--environment',"Variables={TARGET_REGION=$Region}") | Out-Null
+                    '--environment',"Variables={TARGET_REGIONS=$RegionCsv}") | Out-Null
                 $created = $true
             } catch {
                 if ($_.Exception.Message -match 'cannot be assumed|InvalidParameterValueException') {

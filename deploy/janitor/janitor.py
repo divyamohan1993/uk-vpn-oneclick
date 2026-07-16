@@ -18,7 +18,10 @@ TAG_KEY = "created-by"
 TAG_VALUE = "uk-vpn-oneclick"
 EXPIRES_TAG = "expires-at"
 HARD_CAP_SECONDS = 24 * 3600
-REGION = os.environ.get("TARGET_REGION", "eu-west-2")
+# One or more regions to sweep (the web panel can put a box in any allow-list region).
+# TARGET_REGIONS = comma-separated; falls back to the old single TARGET_REGION.
+REGIONS = [r.strip() for r in os.environ.get(
+    "TARGET_REGIONS", os.environ.get("TARGET_REGION", "eu-west-2")).split(",") if r.strip()]
 
 
 def _tag(instance, key):
@@ -104,19 +107,23 @@ def _get_all_instances(client):
 
 def handler(event, context):
     import boto3  # imported here so the pure logic above tests without boto3 installed
-    client = boto3.client("lightsail", region_name=REGION)
     now_epoch = time.time()
-    instances = _get_all_instances(client)
-    doomed = instances_to_delete(instances, now_epoch)
-
-    deleted = []
-    for name, reason in doomed:
+    scanned, deleted = 0, []
+    for region in REGIONS:
         try:
-            client.delete_instance(instanceName=name)
-            deleted.append({"name": name, "reason": reason})
-            print(f"deleted {name} ({reason})")
-        except Exception as e:  # noqa: BLE001 - log and continue; next run retries
-            print(f"ERROR deleting {name}: {type(e).__name__}: {e}")
+            client = boto3.client("lightsail", region_name=region)
+            instances = _get_all_instances(client)
+        except Exception as e:  # noqa: BLE001 - one bad region must not stop the rest
+            print(f"ERROR listing {region}: {type(e).__name__}: {e}")
+            continue
+        scanned += len(instances)
+        for name, reason in instances_to_delete(instances, now_epoch):
+            try:
+                client.delete_instance(instanceName=name)
+                deleted.append({"name": name, "reason": reason, "region": region})
+                print(f"deleted {name} ({reason}) in {region}")
+            except Exception as e:  # noqa: BLE001 - log and continue; next run retries
+                print(f"ERROR deleting {name} in {region}: {type(e).__name__}: {e}")
 
-    print(f"janitor: scanned {len(instances)} instance(s) in {REGION}, deleted {len(deleted)}")
-    return {"scanned": len(instances), "deleted": deleted}
+    print(f"janitor: scanned {scanned} instance(s) across {len(REGIONS)} region(s), deleted {len(deleted)}")
+    return {"scanned": scanned, "deleted": deleted}

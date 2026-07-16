@@ -1,0 +1,47 @@
+name: deploy-lambdas
+# Auto-update the VPN control + janitor Lambdas when their code changes on main.
+# Uses GitHub OIDC to assume a scoped, repo-locked AWS role - NO AWS keys stored here.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'deploy/control/**'
+      - 'deploy/janitor/janitor.py'
+      - '.github/workflows/deploy.yml'
+  workflow_dispatch: {}
+
+permissions:
+  id-token: write      # required for OIDC
+  contents: read
+
+concurrency: deploy-lambdas   # never two deploys at once
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      AWS_REGION: eu-west-2
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS via OIDC (short-lived creds, no stored keys)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::042825952914:role/uk-vpn-gha-deploy
+          aws-region: eu-west-2
+
+      - name: Package + deploy control Lambda
+        run: |
+          python -m pip install --quiet --target build segno
+          cp deploy/control/control.py build/
+          (cd build && zip -qr ../control.zip .)
+          aws lambda update-function-code --function-name uk-vpn-control \
+            --zip-file fileb://control.zip --region "$AWS_REGION" --publish >/dev/null
+          echo "control updated"
+
+      - name: Package + deploy janitor Lambda
+        run: |
+          (cd deploy/janitor && zip -q ../../janitor.zip janitor.py)
+          aws lambda update-function-code --function-name uk-vpn-janitor \
+            --zip-file fileb://janitor.zip --region "$AWS_REGION" --publish >/dev/null
+          echo "janitor updated"
