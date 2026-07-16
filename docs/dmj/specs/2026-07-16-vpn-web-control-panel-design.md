@@ -21,11 +21,36 @@ in the Lambda (no custom crypto, and readiness = key-availability).
 
 - **One control Lambda** (`uk-vpn-control`, Python 3.12, **reserved concurrency 5**) behind
   a **Function URL** (public HTTPS, `AuthType=NONE`). Serves UI + `/api/*`.
-- **Box**: Lightsail `nano_3_0`, name `uk-vpn-web`, **pinned AZ `eu-west-2a` (London)** so
-  the exit is GB. WireGuard-only, self-installs via cloud-init `user-data`. Tags
-  `created-by=uk-vpn-oneclick` + `expires-at=now+5h` ⇒ existing janitor reaps it. Firewall
-  set to **only UDP 51820** (PutInstancePublicPorts replaces the whole set, dropping the
-  default SSH 22).
+- **Box**: Lightsail `nano_3_0`, name `uk-vpn-web`, created in the **user-selected region**
+  (AZ `<region>a`) from a fixed **allow-list** (default London). Exit country = selected
+  region. WireGuard-only, self-installs via cloud-init `user-data`. Tags
+  `created-by=uk-vpn-oneclick` + `expires-at=now+5h` ⇒ janitor reaps it. Firewall set to
+  **only UDP 51820** (PutInstancePublicPorts replaces the whole set, dropping default SSH 22).
+- **Exactly one box, ever** (any region): enforced by the DynamoDB mutex below. `Start`
+  while one runs returns the existing box (+ its region); to **change region**, `Stop` then
+  `Start` elsewhere. The `config` item records the box's region so status/config/stop query
+  the right one.
+
+### Region allow-list (selectable exit)
+
+A fixed server-side list (rejects anything else). Starter set — each is a Lightsail region
+with `nano_3_0`, one AZ used (`<region>a`):
+
+| UI label | region |
+|---|---|
+| London, UK (default) | eu-west-2 |
+| Frankfurt, Germany | eu-central-1 |
+| Dublin, Ireland | eu-west-1 |
+| Stockholm, Sweden | eu-north-1 |
+| Virginia, US-East | us-east-1 |
+| Oregon, US-West | us-west-2 |
+| Montreal, Canada | ca-central-1 |
+| Mumbai, India | ap-south-1 |
+| Singapore | ap-southeast-1 |
+| Tokyo, Japan | ap-northeast-1 |
+| Sydney, Australia | ap-southeast-2 |
+
+The list lives in ONE place (Lambda + janitor share it via an env var) so they never drift.
 - **Box generates its own keys** (`wg genkey`/`pubkey`/`genpsk`) on boot, brings up
   `wg-quick@wg0`, then **POSTs `{client_privkey, server_pubkey, psk, ready}` + a per-launch
   register token to `/api/ready`**. The Lambda stores the client material. The **server
@@ -34,14 +59,18 @@ in the Lambda (no custom crypto, and readiness = key-availability).
   AWS-managed key, **TTL enabled**). Items: `lock` (single-box mutex), `rate#<ip>` (per-IP
   attempts), `config` (current box's client material + register-token hash). Atomic
   conditional writes give the mutex + lockout the atomicity SSM lacks.
-- **Janitor**: unchanged; reaps `uk-vpn-web` at expiry.
+- **Janitor**: must now scan **every allow-list region** (a box can be anywhere), not just
+  eu-west-2. This is a CHANGE to the already-deployed janitor: `janitor.py` loops the region
+  list (from a shared env var), and its `DeleteInstance` IAM widens to those regions. Its
+  tag logic (created-by + expires-at / 24h cap) is unchanged. Redeploy it as part of this
+  work (then CI/CD keeps both Lambdas current).
 
 ## Endpoints (Function URL, path-routed)
 
 | Route | Method | Auth | Action |
 |---|---|---|---|
 | `/` | GET | none | HTML UI (Start/Stop, status poll, password field). Sets security headers. |
-| `/api/start` | POST | password + `X-CSRF` | lock (atomic) → create box (user-data) → `starting` |
+| `/api/start` | POST | password + `X-CSRF` | body `{region}` (validated vs allow-list) → lock (atomic) → create box in that region → `starting` |
 | `/api/ready` | POST | register token | box calls back with its keys → store `config`, mark ready |
 | `/api/status` | GET | session | `stopped`/`starting`(box up, no beacon yet)/`running`(beacon in)+IP |
 | `/api/config` | GET | session | ready → client `.conf` (+ `DNS=1.1.1.1`) + QR + static installer |
@@ -86,7 +115,9 @@ never fires ⇒ `/status` stays `starting` (never false-ready). IMDSv2 + hop-lim
 ## IAM (control Lambda role, least privilege)
 
 - `lightsail`: `GetInstances`, `GetInstance`, `CreateInstances`, `DeleteInstance`,
-  `PutInstancePublicPorts` — all with an `aws:RequestedRegion = eu-west-2` condition.
+  `PutInstancePublicPorts` — with `aws:RequestedRegion` restricted to the **region
+  allow-list** (not a single region). Widens blast radius to those regions only; reserved
+  concurrency + the one-box mutex still bound cost.
 - `dynamodb`: `GetItem/PutItem/UpdateItem/DeleteItem` on the one table ARN.
 - `logs`: write. Nothing else. Compromise ⇒ churn eu-west-2 Lightsail + the one table only.
 - Residual: `CreateInstances` can't be resource-scoped; reserved concurrency bounds the
@@ -119,8 +150,9 @@ transfer quota (low risk personal). `$0.01` budget alert already guards surprise
 API-checkable:
 1. `GET /` → 200 HTML with Start/Stop/Status.
 2. `/api/start` without/wrong password or missing `X-CSRF` → 401/403; **no box created**.
-3. Right password → exactly ONE `uk-vpn-web` box, AZ `eu-west-2a`, tags `created-by` +
-   `expires-at≈now+18000`; a 2nd concurrent start creates **no** second box (mutex).
+3. Right password + a valid region → exactly ONE `uk-vpn-web` box in `<region>a`, tags
+   `created-by` + `expires-at≈now+18000`; a 2nd concurrent start (any region) creates **no**
+   second box (mutex). An off-allow-list region → 400, no box.
 4. Before the beacon, `/api/status` = `starting`; after `/api/ready`, `running`+IP.
 5. `/api/stop` → box deleted, then `config`/`lock` cleared, status `stopped`.
 6. `git grep` shows no plaintext password/keys; env holds only the PBKDF2 hash + session
@@ -130,7 +162,8 @@ API-checkable:
 9. Push to `main` triggers the workflow → `uk-vpn-control` code updated via OIDC (no keys).
 
 E2E (needs a real wg client + geo check, run manually):
-10. Scan QR / import `.conf` → connected, **exit IP GB**, DNS resolves (no blackhole).
+10. Scan QR / import `.conf` → connected, **exit IP matches the selected region's country**,
+    DNS resolves (no blackhole). Switching region (Stop → Start elsewhere) moves the exit.
 
 ## Assumption ledger
 
