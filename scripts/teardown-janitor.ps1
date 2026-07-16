@@ -13,7 +13,7 @@ $RuleName = 'uk-vpn-janitor-schedule'
 $LogGroup = "/aws/lambda/$FnName"
 $BudgetNm = 'uk-vpn-cost-tripwire'
 
-function Try-Aws { param([string[]]$Args) try { Invoke-Aws $Args | Out-Null; $true } catch { $false } }
+function Try-Aws { param([string[]]$CmdArgs) try { Invoke-Aws $CmdArgs | Out-Null; $true } catch { $false } }
 
 Write-Log '=== uk-vpn janitor: TEARDOWN ===' 'Cyan'
 $acct = $null

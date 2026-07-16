@@ -30,9 +30,11 @@ $BudgetNm = 'uk-vpn-cost-tripwire'
 $janitor  = Resolve-Path (Join-Path $PSScriptRoot '..\deploy\janitor\janitor.py')
 
 # Run an aws call that is allowed to "already exists"; swallow only that.
+# NOTE: do NOT name the param $Args - that shadows PowerShell's automatic $args and
+# binds empty. Use $CmdArgs.
 function Aws-Idempotent {
-    param([string[]]$Args, [string]$OkIfMatches = 'already exists|exists|ResourceConflict|EntityAlreadyExists|Conflict')
-    try { return Invoke-Aws $Args }
+    param([string[]]$CmdArgs, [string]$OkIfMatches = 'already exists|exists|ResourceConflict|EntityAlreadyExists|Conflict')
+    try { return Invoke-Aws $CmdArgs }
     catch {
         if ($_.Exception.Message -match $OkIfMatches) { Write-Log "  (exists, skipping)"; return $null }
         throw
