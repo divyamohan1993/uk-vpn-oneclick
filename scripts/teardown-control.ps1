@@ -18,7 +18,12 @@ $regions='eu-west-2','eu-central-1','eu-west-1','eu-north-1','us-east-1','us-wes
 foreach ($r in $regions) {
     if (T @('lightsail','delete-instance','--instance-name','uk-vpn-web','--region',$r)) { Write-Log "Deleted box in $r" }
 }
-if (T @('lambda','delete-function-url-config','--function-name',$Fn,'--region',$Region)) { Write-Log 'Deleted Function URL' }
+# API Gateway HTTP API (the public front)
+$apiId = $null
+try { $apiId = ((Invoke-Aws @('apigatewayv2','get-apis','--region',$Region,'--output','json') | ConvertFrom-Json).Items |
+                Where-Object { $_.Name -eq $Fn } | Select-Object -First 1).ApiId } catch {}
+if ($apiId -and (T @('apigatewayv2','delete-api','--api-id',$apiId,'--region',$Region))) { Write-Log "Deleted API Gateway $apiId" }
+if (T @('lambda','delete-function-url-config','--function-name',$Fn,'--region',$Region)) { Write-Log 'Deleted Function URL (if any)' }
 if (T @('lambda','delete-function','--function-name',$Fn,'--region',$Region))            { Write-Log 'Deleted Lambda' }
 if (T @('dynamodb','delete-table','--table-name',$Table,'--region',$Region))             { Write-Log 'Deleted DynamoDB table' }
 if (T @('logs','delete-log-group','--log-group-name',$LogGrp,'--region',$Region))        { Write-Log 'Deleted log group' }

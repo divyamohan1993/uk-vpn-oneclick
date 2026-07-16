@@ -19,8 +19,18 @@ in the Lambda (no custom crypto, and readiness = key-availability).
 
 ## Architecture
 
-- **One control Lambda** (`uk-vpn-control`, Python 3.12, **reserved concurrency 5**) behind
-  a **Function URL** (public HTTPS, `AuthType=NONE`). Serves UI + `/api/*`.
+- **One control Lambda** (`uk-vpn-control`, Python 3.12) behind an **API Gateway HTTP API**
+  (public HTTPS, proxy → Lambda). Serves UI + `/api/*`.
+  - Designed as a Function URL (`AuthType=NONE`), but that is **refused on this account**:
+    403 at the URL auth layer despite a correct public resource policy, while an IAM-signed
+    request to the same URL returns 200 — the *public* path is blocked, not the function.
+    CloudFront+OAC in front of it was also refused. **API Gateway works** (invokes via
+    `lambda:InvokeFunction`, same payload-format-2.0 event ⇒ handler unchanged). Proven live.
+  - **Reserved concurrency** is skipped when the account Lambda limit is <15 (this account:
+    10, a new-account default); that account-wide cap is itself the flood bound.
+  - IAM, learned live: `lightsail:TagResource` is **required** (we tag on create), and an
+    `aws:RequestedRegion` condition on the Lightsail statement **denies** CreateInstances
+    (Lightsail doesn't populate that key) — the app validates the region instead.
 - **Box**: Lightsail `nano_3_0`, name `uk-vpn-web`, created in the **user-selected region**
   (AZ `<region>a`) from a fixed **allow-list** (default London). Exit country = selected
   region. WireGuard-only, self-installs via cloud-init `user-data`. Tags

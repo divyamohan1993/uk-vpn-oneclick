@@ -73,7 +73,7 @@ try {
     $perm = Join-Path $env:TEMP 'ukctl-perm.json'
     @"
 {"Version":"2012-10-17","Statement":[
- {"Effect":"Allow","Action":["lightsail:GetInstances","lightsail:GetInstance","lightsail:CreateInstances","lightsail:DeleteInstance","lightsail:PutInstancePublicPorts"],"Resource":"*","Condition":{"StringEquals":{"aws:RequestedRegion":[$RegionListJson]}}},
+ {"Effect":"Allow","Action":["lightsail:GetInstances","lightsail:GetInstance","lightsail:CreateInstances","lightsail:DeleteInstance","lightsail:PutInstancePublicPorts","lightsail:TagResource"],"Resource":"*"},
  {"Effect":"Allow","Action":["dynamodb:GetItem","dynamodb:PutItem","dynamodb:UpdateItem","dynamodb:DeleteItem"],"Resource":"arn:aws:dynamodb:$($Region):$($acct):table/$Table"},
  {"Effect":"Allow","Action":["logs:CreateLogGroup","logs:CreateLogStream","logs:PutLogEvents"],"Resource":"*"}
 ]}
@@ -134,15 +134,25 @@ try {
     Aws-Idem @('logs','create-log-group','--log-group-name',$LogGrp,'--region',$Region) | Out-Null
     Invoke-Aws @('logs','put-retention-policy','--log-group-name',$LogGrp,'--region',$Region,'--retention-in-days','1') | Out-Null
 
-    # --- public Function URL (AuthType NONE; password is the gate) ---
-    Write-Log 'Function URL...'
-    $furl = $null
-    try { $furl = (Invoke-Aws @('lambda','get-function-url-config','--function-name',$Fn,'--region',$Region,'--output','json') | ConvertFrom-Json).FunctionUrl } catch {}
-    if (-not $furl) {
-        $furl = (Invoke-Aws @('lambda','create-function-url-config','--function-name',$Fn,'--region',$Region,'--auth-type','NONE','--output','json') | ConvertFrom-Json).FunctionUrl
-        Aws-Idem @('lambda','add-permission','--function-name',$Fn,'--region',$Region,'--statement-id','fnurl','--action','lambda:InvokeFunctionUrl','--principal','*','--function-url-auth-type','NONE') | Out-Null
+    # --- public front: API Gateway HTTP API (proxy -> Lambda) ---
+    # NOT a Lambda Function URL. An AuthType=NONE Function URL is refused on this account
+    # (403 at the URL auth layer even with a correct public resource policy), while an
+    # IAM-signed request to the same URL returns 200 - i.e. the PUBLIC path is blocked, not
+    # the function. API Gateway invokes via lambda:InvokeFunction (works) and delivers the
+    # same payload-format-2.0 event, so control.py needs no change.
+    Write-Log 'API Gateway HTTP API...'
+    $fnArn = "arn:aws:lambda:$($Region):$($acct):function:$Fn"
+    $apiId = $null
+    try { $apiId = ((Invoke-Aws @('apigatewayv2','get-apis','--region',$Region,'--output','json') | ConvertFrom-Json).Items |
+                    Where-Object { $_.Name -eq $Fn } | Select-Object -First 1).ApiId } catch {}
+    if (-not $apiId) {
+        $apiId = (Invoke-Aws @('apigatewayv2','create-api','--name',$Fn,'--protocol-type','HTTP',
+                    '--target',$fnArn,'--region',$Region,'--output','json') | ConvertFrom-Json).ApiId
     }
-    $furlTrim = $furl.TrimEnd('/')
+    Aws-Idem @('lambda','add-permission','--function-name',$Fn,'--region',$Region,'--statement-id','apigw',
+        '--action','lambda:InvokeFunction','--principal','apigateway.amazonaws.com',
+        '--source-arn',"arn:aws:execute-api:$($Region):$($acct):$apiId/*") | Out-Null
+    $furlTrim = "https://$apiId.execute-api.$($Region).amazonaws.com"
     # now that the URL is known, put it into the env (the box beacon needs it)
     $envArg2 = & $mkEnv $furlTrim
     Invoke-Aws @('lambda','wait','function-updated','--function-name',$Fn,'--region',$Region) | Out-Null
